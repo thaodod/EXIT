@@ -37,7 +37,6 @@ class ExitRAG:
             retriever_model,
             device_map="auto",
             torch_dtype=torch.float16,
-            cache_dir="/data/taeho/extractive_refinement/cache"
         )
         self.exit_model = PeftModel.from_pretrained(base_model, compression_model)
         self.exit_tokenizer = AutoTokenizer.from_pretrained(retriever_model)
@@ -46,7 +45,6 @@ class ExitRAG:
         self.reader = AutoModelForCausalLM.from_pretrained(
             reader_model, 
             device_map="auto",
-            cache_dir="/data/taeho/extractive_refinement/cache"
         )
         self.reader_tokenizer = AutoTokenizer.from_pretrained(reader_model)
         
