@@ -71,6 +71,41 @@ print("\nCompressed Context:", result["compressed_context"])
 print("\nAnswer:", result["answer"])
 print(f"\nGeneration Time: {result['generation_time']:.2f}s")
 ```
+## Data Preparation 📚
+
+### Download Datasets
+
+You can download the evaluation datasets (NaturalQuestions, TriviaQA, HotpotQA, 2WikiMultiHopQA) from the [CompAct repository](https://github.com/dmis-lab/CompAct).
+
+### Dataset Structure
+
+Each dataset follows the format:
+
+```json
+
+{
+
+    "question": "How do solid-state drives improve computer performance?",
+
+    "ctxs": [
+
+        {
+
+            "title": "Document Title",
+
+            "text": "Document content...",
+
+            "score": 1.0
+
+        },
+
+        ...
+
+    ]
+
+}
+
+```
 
 ## Model Details 🔧
 
