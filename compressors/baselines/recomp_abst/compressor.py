@@ -12,8 +12,8 @@ class RecompAbstractiveCompressor(BaseCompressor):
         self,
         model_name: str = "fangyuan/nq_abstractive_compressor",
         cache_dir: str = "./cache",
-        max_length: int = 8192,
-        device: str = None
+        max_length: int = 10240,
+        device: str = "cuda"
     ):
         """Initialize RECOMP Abstractive compressor.
         

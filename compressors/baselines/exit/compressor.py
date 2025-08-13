@@ -4,8 +4,6 @@ import torch
 from typing import List, Tuple
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel, PeftConfig
-from torch.cuda.amp import autocast
-import numpy as np
 from functools import lru_cache
 from ...base import BaseCompressor, SearchResult
 
@@ -15,8 +13,8 @@ class EXITCompressor(BaseCompressor):
     def __init__(
         self,
         base_model: str = "google/gemma-2b-it",
-        checkpoint: str = None,
-        device: str = None,
+        checkpoint="doubleyyh/exit-gemma-2b",
+        device='cuda',
         cache_dir: str = "./cache",
         batch_size: int = 8,
         threshold: float = 0.5
@@ -45,10 +43,9 @@ class EXITCompressor(BaseCompressor):
         # Load model
         model_kwargs = {
             "device_map": "auto" if device is None else device,
-            "torch_dtype": torch.float16,
-            "load_in_4bit": True,
+            "torch_dtype": torch.bfloat16,
             "cache_dir": cache_dir,
-            "max_length": 4096,
+            "max_length": 5120,
         }
         
         self.base_model = AutoModelForCausalLM.from_pretrained(
@@ -115,13 +112,13 @@ class EXITCompressor(BaseCompressor):
             in zip(queries, contexts, sentences)
         ]
         
-        with torch.cuda.amp.autocast():
+        with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
             inputs = self.tokenizer(
                 prompts,
                 return_tensors='pt',
                 padding=True,
                 truncation=True,
-                max_length=4096,
+                max_length=8192,
                 return_attention_mask=True
             )
             
@@ -130,7 +127,7 @@ class EXITCompressor(BaseCompressor):
                 for k, v in inputs.items()
             }
             
-            with torch.no_grad(), torch.cuda.amp.autocast():
+            with torch.no_grad(), torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
                 outputs = self.model(**inputs)
                 
                 next_token_logits = outputs.logits[:, -1, :]

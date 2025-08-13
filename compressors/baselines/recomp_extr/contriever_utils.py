@@ -8,7 +8,11 @@ import errno
 from typing import Union, Tuple, List, Dict
 from collections import defaultdict
 import sys
-import dist_utils
+
+try:
+    import dist_utils
+except ImportError:
+    from . import dist_utils
 
 Number = Union[float, int]
 

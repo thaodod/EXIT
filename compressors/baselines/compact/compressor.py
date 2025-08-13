@@ -3,7 +3,7 @@
 import re
 import torch
 from typing import List, Dict
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 from ...base import BaseCompressor, SearchResult
 
 class CompActCompressor(BaseCompressor):
@@ -32,7 +32,6 @@ class CompActCompressor(BaseCompressor):
             model_dir,
             torch_dtype=torch.bfloat16,
             device_map="auto",
-            load_in_4bit=True,
             cache_dir=cache_dir
         )
         self.tokenizer = AutoTokenizer.from_pretrained(model_dir, use_fast=True)
@@ -88,18 +87,73 @@ class CompActCompressor(BaseCompressor):
     
     def _parse_output(self, text: str) -> Dict[str, str]:
         """Parse model output into summary and evaluation."""
-        summary_pattern = r'(Summary:)(.*?)(?=Evaluation:|$)'
-        evaluation_pattern = r'(Evaluation:)(.*?)(?=Summary:|$)'
+        # The model outputs summary directly, then "Evaluation:" followed by evaluation
+        # Look for "Evaluation:" to split the text
+        eval_start = text.find("Evaluation:")
         
-        summary_match = re.search(summary_pattern, text, re.DOTALL)
-        eval_match = re.search(evaluation_pattern, text, re.DOTALL)
+        if eval_start != -1:
+            # Split at "Evaluation:"
+            summary = text[:eval_start].strip()
+            evaluation = text[eval_start:].strip()
+        else:
+            # Fallback: look for [COMPLETE] or [INCOMPLETE] markers
+            complete_pos = text.find('[COMPLETE]')
+            incomplete_pos = text.find('[INCOMPLETE]')
+            
+            if complete_pos != -1:
+                # Find the last sentence before [COMPLETE]
+                marker_context = text[:complete_pos + len('[COMPLETE]')]
+                lines = marker_context.split('\n')
+                
+                # Find where evaluation starts (usually after a line break before [COMPLETE])
+                summary_lines = []
+                eval_lines = []
+                found_eval = False
+                
+                for line in lines:
+                    if '[COMPLETE]' in line or '[INCOMPLETE]' in line:
+                        eval_lines.append(line)
+                        found_eval = True
+                    elif found_eval:
+                        eval_lines.append(line)
+                    else:
+                        summary_lines.append(line)
+                
+                summary = '\n'.join(summary_lines).strip()
+                evaluation = '\n'.join(eval_lines).strip()
+                
+            elif incomplete_pos != -1:
+                # Similar logic for [INCOMPLETE]
+                marker_context = text[:incomplete_pos + len('[INCOMPLETE]')]
+                lines = marker_context.split('\n')
+                
+                summary_lines = []
+                eval_lines = []
+                found_eval = False
+                
+                for line in lines:
+                    if '[COMPLETE]' in line or '[INCOMPLETE]' in line:
+                        eval_lines.append(line)
+                        found_eval = True
+                    elif found_eval:
+                        eval_lines.append(line)
+                    else:
+                        summary_lines.append(line)
+                
+                summary = '\n'.join(summary_lines).strip()
+                evaluation = '\n'.join(eval_lines).strip()
+            else:
+                # No evaluation markers found, treat whole text as summary
+                summary = text.strip()
+                evaluation = "[COMPLETE]"
         
-        summary = summary_match.group(2).strip() if summary_match else ""
-        evaluation = eval_match.group(2).strip() if eval_match else ""
+        # Clean up the text
+        summary = re.sub(r'\s+', ' ', summary).strip()
+        evaluation = re.sub(r'\s+', ' ', evaluation).strip()
         
         return {
-            "summary": summary.replace("\n\n", ""),
-            "eval": evaluation.replace("\n\n", "")
+            "summary": summary,
+            "eval": evaluation
         }
     
     def compress(self, query: str, documents: List[SearchResult]) -> List[SearchResult]:
@@ -131,7 +185,7 @@ class CompActCompressor(BaseCompressor):
                     input_ids=inputs.input_ids,
                     attention_mask=inputs.attention_mask,
                     max_new_tokens=500,
-                    temperature=0,
+                    temperature=0.1,
                     top_p=1.0,
                     pad_token_id=self.tokenizer.eos_token_id
                 )
@@ -149,11 +203,13 @@ class CompActCompressor(BaseCompressor):
                 if "[COMPLETE]" in parsed["eval"]:
                     break
         
-        # Return compressed result
+        # Return compressed result - use the final summary directly
+        final_summary = prev_summaries[-1] if prev_summaries else ""
+        
         return [SearchResult(
             evi_id=0,
             docid=0,
             title="",
-            text=prev_summaries[-1],
+            text=final_summary,
             score=1.0
         )]

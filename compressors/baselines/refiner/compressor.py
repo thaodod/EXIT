@@ -18,7 +18,7 @@ class RefinerCompressor(BaseCompressor):
         base_model: str = "meta-llama/Llama-2-7b-chat-hf",
         adapter: str = "al1231/Refiner-7B",
         device: str = "cuda",
-        max_tokens: int = 3500,
+        max_tokens: int = 10240,
         cache_dir: str = "./cache"
     ):
         """Initialize Refiner compressor.
@@ -42,12 +42,7 @@ class RefinerCompressor(BaseCompressor):
         self.tokenizer.padding_side = "left"
         
         # Load model with quantization
-        bnb_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.float16
-        )
+        bnb_config = BitsAndBytesConfig(load_in_8bit=True)
         
         self.base_model = AutoModelForCausalLM.from_pretrained(
             base_model,
