@@ -1,6 +1,7 @@
 """EXIT implementation for context-aware extractive compression."""
 
 import torch
+import spacy
 from typing import List, Tuple
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel, PeftConfig
@@ -78,6 +79,13 @@ class EXITCompressor(BaseCompressor):
             add_special_tokens=False
         )[0]
         
+        # Initialize sentence splitter
+        self.nlp = spacy.load(
+            "en_core_web_sm",
+            disable=["tok2vec", "tagger", "parser", "attribute_ruler", "lemmatizer", "ner"]
+        )
+        self.nlp.enable_pipe("senter")
+        
         # Clear GPU memory
         torch.cuda.empty_cache()
     
@@ -144,6 +152,59 @@ class EXITCompressor(BaseCompressor):
         
         return predictions, probs
     
+    def _compress_document(
+        self,
+        query: str,
+        document: SearchResult
+    ) -> str:
+        """Compress a single document by selecting relevant sentences.
+        
+        Args:
+            query: Input question
+            document: Single document to compress
+            
+        Returns:
+            Compressed text for the document
+        """
+        # Combine title and text for full document context
+        full_text = f"{document.title}\n{document.text}" if document.title else document.text
+        
+        # Split into sentences using spaCy
+        raw_sentences = [sent.text.strip() for sent in self.nlp(full_text).sents]
+        
+        # Clean up sentences - remove extra whitespace and empty sentences
+        sentences = []
+        for sent in raw_sentences:
+            # Replace multiple whitespace characters with single space
+            cleaned_sent = " ".join(sent.split())
+            if cleaned_sent:  # Only keep non-empty sentences
+                sentences.append(cleaned_sent)
+        
+        if not sentences:
+            return ""
+        
+        # Process sentences in batches
+        selected_sentences = []
+        
+        for i in range(0, len(sentences), self.batch_size):
+            batch_sentences = sentences[i:i + self.batch_size]
+            batch_size = len(batch_sentences)
+            
+            # Create batch inputs (per-document context)
+            queries = [query] * batch_size
+            contexts = [full_text] * batch_size  # Use document's own context
+            
+            # Get predictions for batch
+            predictions, probs = self._predict_batch(queries, contexts, batch_sentences)
+            
+            # Select sentences above threshold
+            for j, (sentence, prob) in enumerate(zip(batch_sentences, probs)):
+                if prob[0].item() >= self.threshold:  # prob[0] is "Yes" probability
+                    selected_sentences.append(sentence)
+        
+        # Join sentences within document with spaces
+        return " ".join(selected_sentences)
+
     def compress(
         self,
         query: str,
@@ -158,52 +219,22 @@ class EXITCompressor(BaseCompressor):
         Returns:
             List containing single SearchResult with compressed text
         """
-        # Prepare full context
-        context = "\n".join(
-            f"{doc.title}\n{doc.text}"
-            for doc in documents
-        )
+        compressed_docs = []
         
-        selected_texts = []
-        current_doc_id = None
-        current_texts = []
-        
-        # Process each document while maintaining order
+        # Compress each document individually
         for doc in documents:
-            # Start new document
-            if current_doc_id != doc.evi_id:
-                if current_texts:
-                    doc_text = " ".join(current_texts)
-                    if doc_text.strip():
-                        selected_texts.append(doc_text)
-                current_doc_id = doc.evi_id
-                current_texts = []
-            
-            # Get predictions for current document
-            predictions, probs = self._predict_batch(
-                [query],
-                [context],
-                [doc.text]
-            )
-            
-            # Add text if above threshold
-            if probs[0, 0].item() >= self.threshold:
-                current_texts.append(doc.text)
+            compressed_text = self._compress_document(query, doc)
+            if compressed_text.strip():  # Only keep non-empty compressed documents
+                compressed_docs.append(compressed_text)
         
-        # Add last document if exists
-        if current_texts:
-            doc_text = " ".join(current_texts)
-            if doc_text.strip():
-                selected_texts.append(doc_text)
-        
-        # Combine all selected texts
-        compressed_text = "\n\n".join(selected_texts)
+        # Combine all compressed documents with newline separators
+        final_compressed_text = "\n".join(compressed_docs)
         
         # Return compressed result
         return [SearchResult(
             evi_id=0,
             docid=0,
             title="",
-            text=compressed_text,
+            text=final_compressed_text,
             score=1.0
         )]

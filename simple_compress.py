@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import argparse
 from compressors import (
     SearchResult, 
     CompActCompressor,
@@ -10,57 +11,7 @@ from compressors import (
     LongLLMLinguaCompressor
 )
 from typing import List
-
-def create_sample_documents() -> List[SearchResult]:
-    """Create sample documents for demonstration."""
-    documents = [
-        SearchResult(
-            evi_id=1,
-            docid=1,
-            title="Solid State Drives Overview",
-            text="""Solid-state drives (SSDs) are storage devices that use flash memory to store data persistently. 
-            Unlike traditional hard disk drives (HDDs), SSDs have no moving mechanical parts, which makes them more 
-            reliable and faster. SSDs use NAND flash memory cells to store data electronically.""",
-            score=0.95
-        ),
-        SearchResult(
-            evi_id=2,
-            docid=2,
-            title="SSD Performance Benefits",
-            text="""SSDs provide significant performance improvements over traditional hard drives. They offer faster 
-            boot times, quicker application loading, and improved overall system responsiveness. The access time for 
-            SSDs is typically under 1 millisecond, compared to 5-10 milliseconds for HDDs.""",
-            score=0.90
-        ),
-        SearchResult(
-            evi_id=3,
-            docid=3,
-            title="SSD Technology Details",
-            text="""Modern SSDs use various types of NAND flash memory, including SLC, MLC, TLC, and QLC. 
-            They connect to computers via interfaces like SATA, PCIe, or M.2. SSDs consume less power than HDDs 
-            and generate less heat, making them ideal for laptops and mobile devices.""",
-            score=0.85
-        ),
-        SearchResult(
-            evi_id=4,
-            docid=4,
-            title="Computing History",
-            text="""The first computers were built in the 1940s and used vacuum tubes. Personal computers became 
-            popular in the 1980s. The internet was invented in the late 20th century. Today, we have smartphones 
-            and cloud computing. Weather prediction has also improved significantly.""",
-            score=0.30
-        ),
-        SearchResult(
-            evi_id=5,
-            docid=5,
-            title="SSD vs HDD Comparison",
-            text="""When comparing SSDs to HDDs, SSDs win in speed, reliability, and power consumption. However, 
-            HDDs typically offer more storage capacity per dollar. SSDs have become much more affordable in recent 
-            years, making them the preferred choice for most users seeking better performance.""",
-            score=0.88
-        )
-    ]
-    return documents
+from utils import create_sample_documents
 
 def compress_with_compact(query: str, documents: List[SearchResult]) -> str:
     """Compress documents using CompAct method."""
@@ -69,7 +20,7 @@ def compress_with_compact(query: str, documents: List[SearchResult]) -> str:
         compressor = CompActCompressor(
             model_dir='cwyoon99/CompAct-7b',
             device='cuda',
-            batch_size=3
+            batch_size=4
         )
         compressed = compressor.compress(query, documents)
         return compressed[0].text if compressed else "No compression result"
@@ -129,13 +80,24 @@ def compress_with_longllmlingua(query: str, documents: List[SearchResult]) -> st
     except Exception as e:
         return f"LongLLMLingua compression failed: {str(e)}"
 
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(description="Document compression example")
+    parser.add_argument("--method", "-m", type=str, required=True,
+                        choices=["compact", "exit", "refiner", "recomp_abstractive", 
+                                "recomp_extractive", "longllmlingua"],
+                        help="Compression method to use")
+    return parser.parse_args()
+
 def main():
-    """Main function demonstrating document compression."""
-    print("📚 EXIT Document Compression Example")
-    print("=" * 50)
+    # Parse command line arguments
+    args = parse_args()
+    method = args.method
     
-    # Define query and create sample documents
+    # Use a fixed query (will be replaced with JSON input in the future)
     query = "How do solid-state drives improve computer performance?"
+    
+    # Create sample documents
     documents = create_sample_documents()
     
     print(f"\n❓ Query: {query}")
@@ -149,33 +111,33 @@ def main():
         print(f"   Text: {doc.text[:100]}...")
     
     print("\n" + "=" * 50)
-    print("🗜️  COMPRESSION RESULTS")
+    print("COMPRESSION RESULTS")
     print("=" * 50)
     
     # Dictionary of compression methods
     compression_methods = {
-        "CompAct": compress_with_compact,
-        "EXIT": compress_with_exit,
-        "Refiner": compress_with_refiner,
-        "Recomp (Abstractive)": compress_with_recomp_abstractive,
-        "Recomp (Extractive)": compress_with_recomp_extractive,
-        "LongLLMLingua": compress_with_longllmlingua,
+        "compact": ("CompAct", compress_with_compact),
+        "exit": ("EXIT", compress_with_exit),
+        "refiner": ("Refiner", compress_with_refiner),
+        "recomp_abstractive": ("Recomp (Abstractive)", compress_with_recomp_abstractive),
+        "recomp_extractive": ("Recomp (Extractive)", compress_with_recomp_extractive),
+        "longllmlingua": ("LongLLMLingua", compress_with_longllmlingua),
     }
     
-    # Try each compression method
+    # Run only the selected compression method
     results = {}
-    for method_name, compress_func in compression_methods.items():
-        print(f"\n🔹 {method_name} Compression:")
-        print("-" * 40)
-        try:
-            compressed_text = compress_func(query, documents)
-            results[method_name] = compressed_text
-            print(f"✅ Compressed text ({len(compressed_text)} chars):")
-            print(f"   {compressed_text}")
-        except Exception as e:
-            error_msg = f"❌ Error: {str(e)}"
-            results[method_name] = error_msg
-            print(error_msg)
+    method_name, compress_func = compression_methods[method]
+    print(f"\n🔹 {method_name} Compression:")
+    print("-" * 40)
+    try:
+        compressed_text = compress_func(query, documents)
+        results[method_name] = compressed_text
+        print(f"✅ Compressed text ({len(compressed_text)} chars):")
+        print(f"{compressed_text}")
+    except Exception as e:
+        error_msg = f"❌ Error: {str(e)}"
+        results[method_name] = error_msg
+        print(error_msg)
     
     # Summary
     print("\n" + "=" * 50)
@@ -193,5 +155,5 @@ def main():
             print(f"{method}: Failed")
 
 if __name__ == "__main__":
-    # Run the full example
+    # Run the example with command line arguments
     main()
