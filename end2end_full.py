@@ -155,7 +155,7 @@ class EndToEndBenchmarkPipeline:
             ).to(self.device)
             
             generate_kwargs = {
-                "max_new_tokens": MAX_OUT_LENGTH, "temperature": 0.0,
+                "max_new_tokens": MAX_OUT_LENGTH, "temperature": 0.0001,
                 "pad_token_id": self.reader_tokenizer.pad_token_id,
             }
             

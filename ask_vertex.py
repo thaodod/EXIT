@@ -2,6 +2,7 @@ import time
 import requests
 from google import genai
 from google.genai import types
+import os
 
 DEFAULT_MODEL = "gemini-2.5-flash"
 CLIENT = genai.Client(
@@ -11,7 +12,15 @@ CLIENT = genai.Client(
     # location="us-east5", ## for llama 4 series
 )
 
-OPENROUTER_API_KEY = "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"
+# Load OpenRouter API key from file
+cache_dir = os.path.expanduser("./cache")
+api_key_file = os.path.join(cache_dir, "openrouter_api_key.txt")
+
+try:
+    with open(api_key_file, 'r') as f:
+        OPENROUTER_API_KEY = f.read().strip()
+except Exception as e:
+    print(f"Error reading OpenRouter API key: {e}")
 
 
 def ask_vertex(prompt, 
