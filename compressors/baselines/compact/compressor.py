@@ -3,7 +3,7 @@
 import re
 import torch
 from typing import List, Dict
-from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
+from transformers import AutoTokenizer, AutoModelForCausalLM
 from ...base import BaseCompressor, SearchResult
 
 class CompActCompressor(BaseCompressor):
@@ -14,7 +14,7 @@ class CompActCompressor(BaseCompressor):
         model_dir: str = 'cwyoon99/CompAct-7b',
         device: str = 'cuda',
         cache_dir: str = "./cache",
-        batch_size: int = 5
+        batch_size: int = 10
     ):
         """Initialize CompAct compressor.
         
@@ -27,14 +27,24 @@ class CompActCompressor(BaseCompressor):
         self.device = device
         self.batch_size = batch_size
         
-        # Load model and tokenizer
+        # Load model and tokenizer with optimizations
         self.model = AutoModelForCausalLM.from_pretrained(
             model_dir,
             torch_dtype=torch.bfloat16,
             device_map="auto",
-            cache_dir=cache_dir
+            cache_dir=cache_dir,
+            attn_implementation="flash_attention_2",
+            low_cpu_mem_usage=True
         )
-        self.tokenizer = AutoTokenizer.from_pretrained(model_dir, use_fast=True)
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            model_dir, 
+            use_fast=True,
+            padding_side="left"
+        )
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token   
+        self.model.eval()  # Set to eval mode for inference optimization
+        self.model = torch.compile(self.model, mode="reduce-overhead")
         
     def _create_prompt(
         self,
@@ -161,7 +171,6 @@ class CompActCompressor(BaseCompressor):
         prev_summaries = []
         prev_evals = []
         
-        # Process documents in batches
         for i in range(0, len(documents), self.batch_size):
             batch_docs = documents[i:i + self.batch_size]
             batch_text = "\n".join(f"{doc.title}\n{doc.text}" for doc in batch_docs)
@@ -175,24 +184,37 @@ class CompActCompressor(BaseCompressor):
                 query, batch_text, prev_summary, prev_eval, i // self.batch_size
             )
             
+            # Optimized inference with reduced memory usage
             with torch.no_grad():
+                # Tokenize with optimizations
                 inputs = self.tokenizer(
                     prompt,
-                    return_tensors="pt"
+                    return_tensors="pt",
+                    truncation=True,
+                    max_length=4096,  # Prevent extremely long inputs
+                    padding=False
                 ).to(self.device)
                 
+                # Optimized generation parameters
                 outputs = self.model.generate(
                     input_ids=inputs.input_ids,
                     attention_mask=inputs.attention_mask,
-                    max_new_tokens=500,
-                    temperature=0.1,
+                    max_new_tokens=512,
                     top_p=1.0,
-                    pad_token_id=self.tokenizer.eos_token_id
+                    pad_token_id=self.tokenizer.eos_token_id,
+                    do_sample=False,  # Greedy decoding is faster
+                    use_cache=True,   # Enable KV cache for faster generation
+                    num_beams=1,      # Greedy search instead of beam search
+                    repetition_penalty=1.0,  # Disable repetition penalty for speed
+                    output_attentions=False,  # Don't compute attention weights
+                    output_hidden_states=False,  # Don't compute hidden states
+                    return_dict_in_generate=False  # Return only token ids
                 )
                 
                 output_text = self.tokenizer.decode(
                     outputs[0][inputs.input_ids.size(1):],
-                    skip_special_tokens=True
+                    skip_special_tokens=True,
+                    clean_up_tokenization_spaces=False  # Faster decoding
                 ).strip()
                 
                 # Parse output
@@ -200,8 +222,13 @@ class CompActCompressor(BaseCompressor):
                 prev_summaries.append(parsed["summary"])
                 prev_evals.append(parsed["eval"])
                 
+                # Early stopping if complete (preserving CompAct's logic)
                 if "[COMPLETE]" in parsed["eval"]:
                     break
+                
+                # Clear GPU cache periodically to prevent OOM
+                if i > 0 and i % (self.batch_size * 2) == 0:
+                    torch.cuda.empty_cache()
         
         # Return compressed result - use the final summary directly
         final_summary = prev_summaries[-1] if prev_summaries else ""
