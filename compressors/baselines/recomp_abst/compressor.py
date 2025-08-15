@@ -75,10 +75,9 @@ class RecompAbstractiveCompressor(BaseCompressor):
         with torch.no_grad():
             summary_ids = self.model.generate(
                 inputs["input_ids"],
-                max_new_tokens=300,
+                max_new_tokens=512,
                 early_stopping=True,
                 num_beams=5,
-                length_penalty=2.0
             )
             
             summary = self.tokenizer.decode(

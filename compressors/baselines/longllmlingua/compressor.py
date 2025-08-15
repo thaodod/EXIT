@@ -7,6 +7,8 @@ import re
 
 class LongLLMLinguaCompressor(BaseCompressor):
     """LongLLMLingua: Dynamic token-level compression."""
+    """If got error past_key_values, then read https://github.com/microsoft/LLMLingua/issues/210
+    We can fix by modifying the package file, nothing to change here"""
     
     def __init__(
         self,
