@@ -41,7 +41,7 @@ def ask_vertex(prompt,
         return "This is a mock response."
 
     # Check if model should use Vertex AI or OpenRouter
-    use_vertex = "gemini" in model.lower() or "llama" in model.lower()
+    use_vertex = "gemini" in model.lower() or "maas" in model.lower()
     
     while retries <= max_retries:
         try:

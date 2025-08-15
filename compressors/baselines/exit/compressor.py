@@ -4,8 +4,7 @@ import torch
 import spacy
 from typing import List, Tuple
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from peft import PeftModel, PeftConfig
-from functools import lru_cache
+from peft import PeftModel
 from ...base import BaseCompressor, SearchResult
 
 class EXITCompressor(BaseCompressor):
@@ -33,51 +32,28 @@ class EXITCompressor(BaseCompressor):
         self.batch_size = batch_size
         self.threshold = threshold
         
-        # Initialize tokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained(
+        print("Loading EXIT models...")
+        
+        # Initialize EXIT compression model (following exit_rag.py pattern)
+        base_model_obj = AutoModelForCausalLM.from_pretrained(
             base_model,
-            use_fast=True
+            device_map=device,
+            torch_dtype=torch.bfloat16,
+            cache_dir=cache_dir
         )
-        self.tokenizer.pad_token = self.tokenizer.eos_token
-        self.tokenizer.padding_side = "left"
-        
-        # Load model
-        model_kwargs = {
-            "device_map": "auto" if device is None else device,
-            "torch_dtype": torch.bfloat16,
-            "cache_dir": cache_dir,
-            "max_length": 4096,
-        }
-        
-        self.base_model = AutoModelForCausalLM.from_pretrained(
-            base_model,
-            **model_kwargs
-        )
-        
-        if checkpoint:
-            self.peft_config = PeftConfig.from_pretrained(checkpoint)
-            self.model = PeftModel.from_pretrained(
-                self.base_model,
-                checkpoint
-            )
-        else:
-            self.model = self.base_model
-            
-        # Prepare model
+        self.model = PeftModel.from_pretrained(base_model_obj, checkpoint)
+        self.tokenizer = AutoTokenizer.from_pretrained(base_model)
+
         self.model.eval()
         if hasattr(self.model, 'half'):
             self.model.half()
+        
+        # Set pad token if not present
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
             
-        # Cache device and token IDs
+        # Cache device
         self.device = next(self.model.parameters()).device
-        self.yes_token_id = self.tokenizer.encode(
-            "Yes",
-            add_special_tokens=False
-        )[0]
-        self.no_token_id = self.tokenizer.encode(
-            "No",
-            add_special_tokens=False
-        )[0]
         
         # Initialize sentence splitter
         self.nlp = spacy.load(
@@ -89,118 +65,102 @@ class EXITCompressor(BaseCompressor):
         # Clear GPU memory
         torch.cuda.empty_cache()
     
-    @lru_cache(maxsize=1024)
-    def _generate_prompt(
+    def get_sentence_relevance(
         self,
         query: str,
         context: str,
-        sentence: str
-    ) -> str:
-        """Generate prompt for relevance classification."""
-        return (
-            f'<start_of_turn>user\n'
-            f'Query:\n{query}\n'
-            f'Full context:\n{context}\n'
-            f'Sentence:\n{sentence}\n'
-            f'Is this sentence useful in answering the query? '
-            f'Answer only "Yes" or "No".<end_of_turn>\n'
-            f'<start_of_turn>model\n'
-        )
+        sentence: str,
+    ) -> Tuple[bool, float]:
+        """Single sentence relevance (kept for compatibility)."""
+        results = self.get_batch_sentence_relevance(query, context, [sentence])
+        return results[0]
     
-    def _predict_batch(
+    def get_batch_sentence_relevance(
         self,
-        queries: List[str],
-        contexts: List[str],
-        sentences: List[str]
-    ) -> Tuple[List[str], torch.Tensor]:
-        """Predict relevance for a batch of sentences."""
-        prompts = [
-            self._generate_prompt(query, context, sentence)
-            for query, context, sentence
-            in zip(queries, contexts, sentences)
-        ]
+        query: str,
+        context: str,
+        sentences: List[str],
+    ) -> List[Tuple[bool, float]]:
+        """Batch process multiple sentences for relevance scoring."""
+        if not sentences:
+            return []
         
-        with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
+        # Create prompts for all sentences
+        prompts = []
+        for sentence in sentences:
+            prompt = f'''<start_of_turn>user
+Query:
+{query}
+Full context:
+{context}
+Sentence:
+{sentence}
+Is this sentence useful in answering the query? Answer only "Yes" or "No".<end_of_turn>
+<start_of_turn>model
+'''
+            prompts.append(prompt)
+        
+        # Process in batches
+        results = []
+        for i in range(0, len(prompts), self.batch_size):
+            batch_prompts = prompts[i:i + self.batch_size]
+            
+            # Tokenize batch
             inputs = self.tokenizer(
-                prompts,
-                return_tensors='pt',
+                batch_prompts,
+                return_tensors="pt",
                 padding=True,
                 truncation=True,
-                max_length=4096,
-                return_attention_mask=True
-            )
+                max_length=9216,  # Adjust as needed
+            ).to(self.model.device)
             
-            inputs = {
-                k: v.to(self.device, non_blocking=True)
-                for k, v in inputs.items()
-            }
-            
-            with torch.no_grad(), torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
+            with torch.no_grad():
                 outputs = self.model(**inputs)
                 
-                next_token_logits = outputs.logits[:, -1, :]
-                relevant_logits = torch.stack([
-                    next_token_logits[:, self.yes_token_id],
-                    next_token_logits[:, self.no_token_id]
-                ], dim=1)
+                # Get Yes/No token IDs
+                yes_id = self.tokenizer.encode("Yes", add_special_tokens=False)[0]
+                no_id = self.tokenizer.encode("No", add_special_tokens=False)[0]
                 
-                probs = torch.softmax(relevant_logits, dim=1)
-                predictions = [
-                    "Yes" if p else "No"
-                    for p in probs.argmax(dim=1).cpu().numpy()
-                ]
+                # Process each item in the batch
+                for j in range(len(batch_prompts)):
+                    # Get logits for the last token of this sequence
+                    seq_len = inputs['attention_mask'][j].sum().item() - 1  # -1 for 0-indexing
+                    logits = outputs.logits[j, seq_len, [yes_id, no_id]]
+                    prob = torch.softmax(logits, dim=0)[0].item()
+                    
+                    is_relevant = prob >= self.threshold
+                    results.append((is_relevant, prob))
         
-        return predictions, probs
+        return results
     
     def _compress_document(
         self,
         query: str,
         document: SearchResult
     ) -> str:
-        """Compress a single document by selecting relevant sentences.
-        
-        Args:
-            query: Input question
-            document: Single document to compress
-            
-        Returns:
-            Compressed text for the document
+        """Compress a single document by selecting relevant sentences (per-document as in paper).
         """
         # Combine title and text for full document context
         full_text = f"{document.title}\n{document.text}" if document.title else document.text
         
-        # Split into sentences using spaCy
-        raw_sentences = [sent.text.strip() for sent in self.nlp(full_text).sents]
-        
-        # Clean up sentences - remove extra whitespace and empty sentences
-        sentences = []
-        for sent in raw_sentences:
-            # Replace multiple whitespace characters with single space
-            cleaned_sent = " ".join(sent.split())
-            if cleaned_sent:  # Only keep non-empty sentences
-                sentences.append(cleaned_sent)
+        # Split into sentences using spaCy (following exit_rag.py pattern)
+        sentences = [sent.text.strip() for sent in self.nlp(full_text).sents]
         
         if not sentences:
             return ""
         
-        # Process sentences in batches
-        selected_sentences = []
+        # Get relevance scores for all sentences using batch processing
+        relevance_results = self.get_batch_sentence_relevance(
+            query,
+            full_text,  # Use document's own context (as per paper methodology)
+            sentences,
+        )
         
-        for i in range(0, len(sentences), self.batch_size):
-            batch_sentences = sentences[i:i + self.batch_size]
-            batch_size = len(batch_sentences)
-            
-            # Create batch inputs (per-document context)
-            queries = [query] * batch_size
-            contexts = [full_text] * batch_size  # Use document's own context
-            
-            # Get predictions for batch
-            predictions, probs = self._predict_batch(queries, contexts, batch_sentences)
-            
-            # Select sentences above threshold
-            for j, (sentence, prob) in enumerate(zip(batch_sentences, probs)):
-                if prob[0].item() >= self.threshold:  # prob[0] is "Yes" probability
-                    selected_sentences.append(sentence)
+        # Select relevant sentences
+        selected_sentences = []
+        for sent, (is_relevant, score) in zip(sentences, relevance_results):
+            if is_relevant:
+                selected_sentences.append(sent)
         
         # Join sentences within document with spaces
         return " ".join(selected_sentences)
@@ -210,7 +170,7 @@ class EXITCompressor(BaseCompressor):
         query: str,
         documents: List[SearchResult]
     ) -> List[SearchResult]:
-        """Compress documents using context-aware extraction.
+        """Compress documents using context-aware extraction (following paper methodology).
         
         Args:
             query: Input question
@@ -219,17 +179,31 @@ class EXITCompressor(BaseCompressor):
         Returns:
             List containing single SearchResult with compressed text
         """
-        compressed_docs = []
+        # Sort documents by score in descending order (as per paper)
+        sorted_documents = sorted(documents, key=lambda x: x.score, reverse=True)
         
-        # Compress each document individually
-        for doc in documents:
+        compressed_docs = []
+        total_original_sentences = 0
+        total_selected_sentences = 0
+        
+        # Compress each document individually (as per paper methodology)
+        for doc in sorted_documents:
+            # Count original sentences
+            full_text = f"{doc.title}\n{doc.text}" if doc.title else doc.text
+            original_sentences = [sent.text.strip() for sent in self.nlp(full_text).sents]
+            total_original_sentences += len(original_sentences)
+            
             compressed_text = self._compress_document(query, doc)
             if compressed_text.strip():  # Only keep non-empty compressed documents
                 compressed_docs.append(compressed_text)
+                # Count selected sentences
+                selected_sentences = [sent.text.strip() for sent in self.nlp(compressed_text).sents]
+                total_selected_sentences += len(selected_sentences)
         
-        # Combine all compressed documents with newline separators
+        # Combine all compressed documents with newline separators (maintaining score order)
         final_compressed_text = "\n".join(compressed_docs)
         
+        # print(f"Compressed {total_selected_sentences}/{total_original_sentences} sentences from {len(sorted_documents)} documents")
         # Return compressed result
         return [SearchResult(
             evi_id=0,
