@@ -5,7 +5,6 @@ from typing import List
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
-    BitsAndBytesConfig
 )
 from peft import PeftModel
 from ...base import BaseCompressor, SearchResult
@@ -41,15 +40,13 @@ class RefinerCompressor(BaseCompressor):
         self.tokenizer.pad_token = self.tokenizer.eos_token
         self.tokenizer.padding_side = "left"
         
-        # Load model with quantization
-        bnb_config = BitsAndBytesConfig(load_in_8bit=True)
-        
         self.base_model = AutoModelForCausalLM.from_pretrained(
             base_model,
+            torch_dtype=torch.bfloat16,
             device_map="auto",
-            quantization_config=bnb_config,
             trust_remote_code=True,
-            cache_dir=cache_dir
+            cache_dir=cache_dir,
+            attn_implementation="flash_attention_2",
         )
         
         # Load adapter
@@ -59,6 +56,7 @@ class RefinerCompressor(BaseCompressor):
             is_trainable=False
         )
         self.model.eval()
+        self.model = torch.compile(self.model, mode="reduce-overhead")
         
         # Prompt template
         self.template = (
@@ -107,7 +105,7 @@ class RefinerCompressor(BaseCompressor):
                 top_p=1,
                 temperature=None,
                 do_sample=False,
-                max_new_tokens=8096,
+                max_new_tokens=1024,
                 num_return_sequences=1,
                 output_scores=True,
                 return_dict_in_generate=True,

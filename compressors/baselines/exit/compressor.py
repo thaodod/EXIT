@@ -46,7 +46,7 @@ class EXITCompressor(BaseCompressor):
             "device_map": "auto" if device is None else device,
             "torch_dtype": torch.bfloat16,
             "cache_dir": cache_dir,
-            "max_length": 5120,
+            "max_length": 4096,
         }
         
         self.base_model = AutoModelForCausalLM.from_pretrained(
@@ -126,7 +126,7 @@ class EXITCompressor(BaseCompressor):
                 return_tensors='pt',
                 padding=True,
                 truncation=True,
-                max_length=8192,
+                max_length=4096,
                 return_attention_mask=True
             )
             
