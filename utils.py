@@ -5,6 +5,7 @@ import string
 import unicodedata
 import regex
 import spacy
+import tiktoken
 from collections import Counter
 from typing import List, Union, Any, Dict
 from concurrent.futures import ThreadPoolExecutor
@@ -13,6 +14,7 @@ from tqdm import tqdm
 # Load spaCy model for sentence segmentation
 nlp = spacy.load("en_core_web_sm", exclude=['tagger', 'parser', 'ner', 'lemmatizer', 'tok2vec'])
 nlp.enable_pipe("senter")
+ENCODING = tiktoken.get_encoding("cl100k_base")
 
 def count_sentences(text: str, nlp_model=None) -> int:
     """Count the number of sentences in a text using spaCy."""
@@ -337,3 +339,8 @@ def preprocess_contexts(question_data: Dict, k: int, nlp_model=None) -> List[Dic
     processed_segments = group_short_segments(merged_segments, model)
     
     return processed_segments
+
+
+def count_tokens(text: str) -> int:
+    """Count tokens in text using tiktoken."""
+    return len(ENCODING.encode(text))

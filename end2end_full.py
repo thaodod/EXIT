@@ -33,7 +33,8 @@ from utils import (
     format_prompt,
     generate_answers_api,
     evaluate_batch,
-    preprocess_contexts
+    preprocess_contexts,
+    count_tokens
 )
 
 warnings.filterwarnings("ignore")
@@ -175,10 +176,17 @@ class EndToEndBenchmarkPipeline:
         """Process a batch of questions end-to-end with preprocessed segments."""
         prompts = []
         total_compress_time = 0
+        total_original_tokens = 0
+        total_compressed_tokens = 0
 
         # Iterate through each question in the batch for compression
         for i, question in enumerate(batch_questions):
             segments = batch_segments[i]
+            
+            # Calculate original tokens from preprocessed segments
+            original_text = "\n".join(seg['text'] for seg in segments)
+            original_tokens = count_tokens(original_text)
+            total_original_tokens += original_tokens
             
             # Convert segments (dicts) to SearchResult objects for the compressor
             search_results = [
@@ -196,6 +204,10 @@ class EndToEndBenchmarkPipeline:
             # Combine compressed text into a final document
             final_document = "\n".join(doc.text for doc in compressed_docs)
             
+            # Calculate compressed tokens
+            compressed_tokens = count_tokens(final_document)
+            total_compressed_tokens += compressed_tokens
+            
             # Create prompt for the reader model
             prompt = format_prompt(question, final_document, self.reader_tokenizer, self.use_api)
             prompts.append(prompt)
@@ -208,7 +220,9 @@ class EndToEndBenchmarkPipeline:
         batch_size = len(batch_questions)
         timing_info = {
             'compress_time_per_question': total_compress_time / batch_size,
-            'generate_time_per_question': generate_time / batch_size
+            'generate_time_per_question': generate_time / batch_size,
+            'original_tokens': total_original_tokens,
+            'compressed_tokens': total_compressed_tokens
         }
         
         return predictions, batch_ground_truths, timing_info
@@ -254,6 +268,7 @@ def main():
 
     total_em, total_f1, total_count = 0, 0, 0
     total_compress_time, total_generate_time = 0, 0
+    total_original_tokens, total_compressed_tokens = 0, 0
 
     for i in tqdm(range(0, len(questions_data), args.batch_size), desc="Processing Batches"):
         batch_questions = all_questions[i:i + args.batch_size]
@@ -273,6 +288,8 @@ def main():
         batch_item_count = len(batch_questions)
         total_compress_time += timing_info['compress_time_per_question'] * batch_item_count
         total_generate_time += timing_info['generate_time_per_question'] * batch_item_count
+        total_original_tokens += timing_info['original_tokens']
+        total_compressed_tokens += timing_info['compressed_tokens']
 
     if total_count > 0:
         final_results = {
@@ -283,6 +300,7 @@ def main():
         avg_compress_time = total_compress_time / total_count
         avg_generate_time = total_generate_time / total_count
         avg_total_time = avg_compress_time + avg_generate_time
+        compression_ratio = total_compressed_tokens / total_original_tokens if total_original_tokens > 0 else 0
 
         print_evaluation_results(final_results, f"FINAL EVALUATION RESULTS for '{args.method.upper()}'")
         print("\nAVERAGE PROCESSING TIME PER QUESTION:")
@@ -290,6 +308,8 @@ def main():
         print(f"  Answer Generation:  {avg_generate_time:.4f} seconds")
         print(f"  ---------------------------------")
         print(f"  Total Inference:    {avg_total_time:.4f} seconds")
+        print(f"\nCOMPRESSION STATISTICS:")
+        print(f"  Compression Ratio:  {compression_ratio:.3f}")
         print("="*80)
     else:
         print("No questions were processed.")
