@@ -13,10 +13,7 @@ from concurrent.futures import ProcessPoolExecutor
 # Assuming transformers is installed
 from transformers import AutoTokenizer, AutoModelForCausalLM
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
-# --- Compressor Imports ---
-# This section assumes you have a 'compressors' module available in your project
-# containing the definitions for the following classes and SearchResult.
-# This is based on your `simple_compress.py` script.
+
 from compressors import (
     SearchResult,
     CompActCompressor,
@@ -148,7 +145,7 @@ class EndToEndBenchmarkPipeline:
     def _generate_answers_local(self, prompts: List[str]) -> List[str]:
         """Generate answers using the local reader model."""
         all_responses = []
-        for i in tqdm(range(0, len(prompts), self.reader_batch_size), desc="Generating Answers"):
+        for i in tqdm(range(0, len(prompts), self.reader_batch_size), desc="Generating Answers", leave=False):
             batch_prompts = prompts[i:i + self.reader_batch_size]
             inputs = self.reader_tokenizer(
                 batch_prompts, return_tensors="pt", padding=True, truncation=True,
