@@ -1,6 +1,6 @@
 # Core ML dependencies
 # torch==2.6.0
-transformers==4.53.0
+transformers==4.53.3
 peft>=0.7.0
 accelerate>=0.24.0
 bitsandbytes>=0.41.0
