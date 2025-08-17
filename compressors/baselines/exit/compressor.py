@@ -111,7 +111,7 @@ Is this sentence useful in answering the query? Answer only "Yes" or "No".<end_o
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
-                max_length=9216,  # Adjust as needed
+                max_length=8192,
             ).to(self.model.device)
             
             with torch.no_grad():

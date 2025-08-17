@@ -28,7 +28,7 @@ def ask_vertex(prompt,
                max_retries=4, 
                retry_delay=5, 
                mock=False,
-               temperature=0.001,
+               temperature=0.0001,
                top_p=1.0,
                max_output_tokens=360):
     """ 
@@ -95,7 +95,7 @@ def ask_vertex(prompt,
                     'top_p': top_p,
                     'max_tokens': max_output_tokens,
                     'provider': {
-                        'quantizations': ['bf16', 'fp16', 'fp8', 'fp4']
+                        'quantizations': ['bf16', 'fp16', 'fp8', 'int8']
                     }
                 }
                 

@@ -259,12 +259,6 @@ def preprocess_contexts(question_data: Dict, k: int, nlp_model=None) -> List[Dic
         
         return merged_segments
 
-    def add_title_prefix(segment: Dict) -> Dict:
-        """Add title prefix to segment if title is not in the text."""
-        if segment['title'].lower() not in segment['text'].lower():
-            segment['text'] = segment['title'] + '. ' + segment['text']
-        return segment
-
     def create_grouped_segment(segments: List[Dict]) -> Dict:
         """Create a single segment from a group of segments."""
         if not segments:
@@ -307,11 +301,9 @@ def preprocess_contexts(question_data: Dict, k: int, nlp_model=None) -> List[Dic
         current_sentence_count = 0
         
         for segment in short_segments:
-            segment = add_title_prefix(segment)
-            
             segment_sentences = count_sentences(segment['text'], nlp_model)
             
-            if current_sentence_count + segment_sentences <= 15:
+            if current_sentence_count + segment_sentences <= 12:
                 current_group.append(segment)
                 current_sentence_count += segment_sentences
             else:
