@@ -7,7 +7,7 @@ import os
 DEFAULT_MODEL = "gemini-2.5-flash"
 CLIENT = genai.Client(
     vertexai=True,
-    project="exalted-entry-468113-h3",
+    project="savefiles-185217",
     location="us-central1", ## for llama 3 series
     # location="us-east5", ## for llama 4 series
 )
