@@ -81,8 +81,12 @@ class EvaluationPipeline:
             ).to(self.device)
             
             generate_kwargs = {
-                "max_new_tokens": MAX_OUT_LENGTH, "temperature": 0.0001,
+                "max_new_tokens": MAX_OUT_LENGTH,
+                "temperature": 0.001,
+                "top_p": 1.0,
+                "do_sample": True,
                 "pad_token_id": self.reader_tokenizer.pad_token_id,
+                "eos_token_id": self.reader_tokenizer.eos_token_id
             }
             
             with torch.no_grad():
