@@ -104,19 +104,20 @@ class EvaluationPipeline:
         if self.use_api:
             prompts = [item['prompt_api'] for item in compressed_data]
         else:
-            # For local models, we need to apply chat template
+            # For local models, we need to apply chat template to the API prompt content
             prompts = []
             for item in compressed_data:
                 if self.reader_tokenizer and hasattr(self.reader_tokenizer, 'apply_chat_template'):
-                    # Parse the stored prompt to extract the content
-                    content = item['prompt_local']
+                    # Use the same content as API but apply chat template for local model
+                    content = item['prompt_api']  # Use the same prompt content
                     messages = [{"role": "user", "content": content}]
                     prompt = self.reader_tokenizer.apply_chat_template(
                         messages, tokenize=False, add_generation_prompt=True
                     )
                     prompts.append(prompt)
                 else:
-                    prompts.append(item['prompt_local'])
+                    # Fallback: use the API prompt directly
+                    prompts.append(item['prompt_api'])
         
         ground_truths = [item['ground_truth'] for item in compressed_data]
         

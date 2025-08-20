@@ -142,16 +142,14 @@ class CompressionPipeline:
             compressed_tokens = count_tokens(final_document)
             total_compressed_tokens += compressed_tokens
             
-            # Create prompt (we'll store both API and local formats)
+            # Create prompt (API format only to avoid tokenizer dependency)
             prompt_api = format_prompt(question, final_document, None, use_api=True)
-            prompt_local = format_prompt(question, final_document, None, use_api=False)
             
             # Store the compressed data
             compressed_entry = {
                 'question': question,
                 'compressed_context': final_document,
                 'prompt_api': prompt_api,
-                'prompt_local': prompt_local,
                 'ground_truth': question_data.get('answer') or question_data.get('answers'),
                 'original_tokens': original_tokens,
                 'compressed_tokens': compressed_tokens
