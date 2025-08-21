@@ -164,8 +164,8 @@ def main():
     parser.add_argument('--input', '-i', type=str, required=True, help='Input JSON file with compressed data.')
     parser.add_argument('--reader_model_name', '-rm', type=str, default="meta-llama/Meta-Llama-3.1-8B-Instruct",
                         help="Hugging Face model name for the reader.")
-    parser.add_argument('--batch_size', '-b', type=int, default=8, help='Batch size for evaluation.')
-    parser.add_argument('--reader_batch_size', '-rb', type=int, default=8, help='Batch size for the reader model.')
+    parser.add_argument('--batch_size', '-b', type=int, default=16, help='Batch size for evaluation.')
+    parser.add_argument('--reader_batch_size', '-rb', type=int, default=16, help='Batch size for the reader model.')
     parser.add_argument('--auto_dtype', '-ad', action='store_true', help='Use torch_dtype="auto" for reader model loading.')
     parser.add_argument('--api', '-api', type=str, default=None, help='Vertex AI model name. If set, uses API instead of local reader.')
 
