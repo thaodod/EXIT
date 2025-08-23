@@ -99,19 +99,22 @@ class RecompExtractiveCompressor(BaseCompressor):
         doc_embeddings = embeddings[1:]
         
         # Compute similarity scores
-        if len(doc_embeddings) == 1:
-            similarity_scores = (query_embedding @ doc_embeddings.T)
-        else:
-            similarity_scores = (query_embedding @ doc_embeddings.T).squeeze()
+        similarity_scores = (query_embedding @ doc_embeddings.T).squeeze()
+        
+        # Ensure similarity_scores is 1D
+        if similarity_scores.dim() == 0:
+            similarity_scores = similarity_scores.unsqueeze(0)
         
         # Convert to CPU and get top k indices
         scores = similarity_scores.cpu()
         n_select = min(self.n_sentences, len(documents))
-        top_indices = torch.topk(scores, n_select).indices.tolist()
+        top_indices = torch.topk(scores, n_select).indices
         
-        # If only one document, convert to list
-        if isinstance(top_indices, int):
-            top_indices = [top_indices]
+        # Convert to list of integers
+        if top_indices.dim() == 0:  # scalar tensor
+            top_indices = [top_indices.item()]
+        else:
+            top_indices = top_indices.tolist()
         
         # Select top documents
         compressed_docs = []
