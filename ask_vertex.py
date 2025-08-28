@@ -95,7 +95,7 @@ def ask_vertex(prompt,
                     'top_p': top_p,
                     'max_tokens': max_output_tokens,
                     'provider': {
-                        'quantizations': ['bf16', 'fp16']
+                        'quantizations': ['bf16', 'fp16', 'fp8']
                     }
                 }
                 
