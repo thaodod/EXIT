@@ -12,6 +12,7 @@ from concurrent.futures import ProcessPoolExecutor
 
 # Assuming transformers is installed
 from transformers import AutoTokenizer, AutoModelForCausalLM
+from torch.profiler import profile, ProfilerActivity
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
 from compressors import (
@@ -77,11 +78,14 @@ def preprocess_single_question(question_data_with_k: Tuple[Dict, int]) -> List[D
 class EndToEndBenchmarkPipeline:
     def __init__(self, method: str, reader_model_name: str = None,
                  k: int = 10, reader_batch_size: int = 8,
-                 use_auto_dtype: bool = False, api_model: str = None):
+                 use_auto_dtype: bool = False, api_model: str = None,
+                 profile_flops: bool = False):
         self.k = k
         self.reader_batch_size = reader_batch_size
         self.use_api = api_model is not None
         self.api_model = api_model
+        # FLOPs profiling configuration
+        self.profile_flops = profile_flops
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
@@ -179,39 +183,76 @@ class EndToEndBenchmarkPipeline:
         total_compress_time = 0
         total_original_tokens = 0
         total_compressed_tokens = 0
+        total_compress_flops = 0
 
-        # Iterate through each question in the batch for compression
-        for i, question in enumerate(batch_questions):
-            segments = batch_segments[i]
-            
-            # Calculate original tokens from preprocessed segments
-            original_text = "\n".join(seg['text'] for seg in segments)
-            original_tokens = count_tokens(original_text)
-            total_original_tokens += original_tokens
-            
-            # Convert segments (dicts) to SearchResult objects for the compressor
-            search_results = [
-                SearchResult(
-                    evi_id=idx, docid=idx,  # Using index as placeholder
-                    title=seg['title'], text=seg['text'], score=float(seg['score'])
-                ) for idx, seg in enumerate(segments)
-            ]
-            
-            # Time and perform compression for a single question
-            compress_start = time.time()
-            compressed_docs = self.compressor.compress(question, search_results)
-            total_compress_time += (time.time() - compress_start)
-            
-            # Combine compressed text into a final document
-            final_document = "\n".join(doc.text for doc in compressed_docs)
-            
-            # Calculate compressed tokens
-            compressed_tokens = count_tokens(final_document)
-            total_compressed_tokens += compressed_tokens
-            
-            # Create prompt for the reader model
-            prompt = format_prompt(question, final_document, self.reader_tokenizer, self.use_api)
-            prompts.append(prompt)
+        # Optional: open a single profiler for the whole batch (compression stage only)
+        prof = None
+        prof_ctx = None
+        if self.profile_flops:
+            activities = [ProfilerActivity.CPU]
+            if torch.cuda.is_available():
+                activities.append(ProfilerActivity.CUDA)
+            try:
+                prof_ctx = profile(
+                    activities=activities,
+                    record_shapes=True,
+                    with_flops=True,
+                    profile_memory=False,
+                    with_stack=False,
+                )
+                prof = prof_ctx.__enter__()
+            except Exception:
+                # Fall back to running without profiling if profiler setup fails
+                prof = None
+                prof_ctx = None
+
+        try:
+            # Iterate through each question in the batch for compression
+            for i, question in enumerate(batch_questions):
+                segments = batch_segments[i]
+                
+                # Calculate original tokens from preprocessed segments
+                original_text = "\n".join(seg['text'] for seg in segments)
+                original_tokens = count_tokens(original_text)
+                total_original_tokens += original_tokens
+                
+                # Convert segments (dicts) to SearchResult objects for the compressor
+                search_results = [
+                    SearchResult(
+                        evi_id=idx, docid=idx,  # Using index as placeholder
+                        title=seg['title'], text=seg['text'], score=float(seg['score'])
+                    ) for idx, seg in enumerate(segments)
+                ]
+                
+                # Time and perform compression for a single question
+                compress_start = time.time()
+                compressed_docs = self.compressor.compress(question, search_results)
+                total_compress_time += (time.time() - compress_start)
+                
+                # Combine compressed text into a final document
+                final_document = "\n".join(doc.text for doc in compressed_docs)
+                
+                # Calculate compressed tokens
+                compressed_tokens = count_tokens(final_document)
+                total_compressed_tokens += compressed_tokens
+                
+                # Create prompt for the reader model
+                prompt = format_prompt(question, final_document, self.reader_tokenizer, self.use_api)
+                prompts.append(prompt)
+        finally:
+            # Close profiler and aggregate FLOPs for the batch
+            if prof_ctx is not None and prof is not None:
+                try:
+                    prof_ctx.__exit__(None, None, None)
+                finally:
+                    flops_sum = 0
+                    for evt in prof.key_averages():
+                        fl = getattr(evt, "flops", None)
+                        if fl is not None:
+                            flops_sum += int(fl)
+                    total_compress_flops += flops_sum
+                    # Drop profiler object to release memory after each batch
+                    del prof
         
         # Generate answers for the entire batch of prompts
         generate_start = time.time()
@@ -223,7 +264,8 @@ class EndToEndBenchmarkPipeline:
             'compress_time_per_question': total_compress_time / batch_size,
             'generate_time_per_question': generate_time / batch_size,
             'original_tokens': total_original_tokens,
-            'compressed_tokens': total_compressed_tokens
+            'compressed_tokens': total_compressed_tokens,
+            'compress_flops': float(total_compress_flops),
         }
         
         return predictions, batch_ground_truths, timing_info
@@ -242,11 +284,19 @@ def main():
     parser.add_argument('--reader_batch_size', '-rb', type=int, default=8, help='Batch size for the reader model.')
     parser.add_argument('--auto_dtype', '-ad', action='store_true', help='Use torch_dtype="auto" for reader model loading.')
     parser.add_argument('--api', '-api', type=str, default=None, help='Vertex AI model name. If set, uses API instead of a local reader.')
+    parser.add_argument('--profile_flops', action='store_true', help='Profile FLOPs for the compression stage using torch.profiler.')
 
     args = parser.parse_args()
 
     if args.api is None and args.reader_model_name is None:
         parser.error("Either --reader_model_name or --api must be provided.")
+    
+    # Reset CUDA peak memory stats before creating models to measure end-to-end peak VRAM
+    if torch.cuda.is_available():
+        for dev in range(torch.cuda.device_count()):
+            with torch.cuda.device(dev):
+                torch.cuda.empty_cache()
+                torch.cuda.reset_peak_memory_stats()
 
     pipeline = EndToEndBenchmarkPipeline(
         method=args.method,
@@ -254,7 +304,8 @@ def main():
         k=args.k,
         reader_batch_size=args.reader_batch_size,
         use_auto_dtype=args.auto_dtype,
-        api_model=args.api
+        api_model=args.api,
+        profile_flops=args.profile_flops,
     )
 
     with open(args.input, 'r') as f:
@@ -270,6 +321,7 @@ def main():
     total_em, total_f1, total_count = 0, 0, 0
     total_compress_time, total_generate_time = 0, 0
     total_original_tokens, total_compressed_tokens = 0, 0
+    total_compress_flops = 0.0
 
     for i in tqdm(range(0, len(questions_data), args.batch_size), desc="Processing Batches"):
         batch_questions = all_questions[i:i + args.batch_size]
@@ -291,6 +343,7 @@ def main():
         total_generate_time += timing_info['generate_time_per_question'] * batch_item_count
         total_original_tokens += timing_info['original_tokens']
         total_compressed_tokens += timing_info['compressed_tokens']
+        total_compress_flops += timing_info.get('compress_flops', 0.0)
 
     if total_count > 0:
         final_results = {
@@ -311,6 +364,26 @@ def main():
         print(f"  Total Inference:    {avg_total_time:.4f} seconds")
         print(f"\nCOMPRESSION STATISTICS:")
         print(f"  Compression Ratio:  {compression_ratio:.3f}")
+        # Report FLOPs if collected
+        if args.profile_flops:
+            avg_flops_per_q = (total_compress_flops / total_count) if total_count > 0 else 0.0
+            # Present in GFLOPs for readability
+            print(f"  Compression FLOPs (avg/question): {avg_flops_per_q/1e9:.3f} GFLOPs")
+            print(f"  Compression FLOPs (total profiled): {total_compress_flops/1e9:.3f} GFLOPs")
+        
+        # Report peak VRAM (across all GPUs) in GB, using reserved memory as occupied VRAM
+        peak_vram_gb = 0.0
+        if torch.cuda.is_available():
+            try:
+                torch.cuda.synchronize()
+            except Exception:
+                pass
+            peak_bytes = 0
+            for dev in range(torch.cuda.device_count()):
+                with torch.cuda.device(dev):
+                    peak_bytes = max(peak_bytes, torch.cuda.max_memory_reserved())
+            peak_vram_gb = peak_bytes / (1024 ** 3)
+        print(f"  Peak VRAM (GB):     {peak_vram_gb:.2f}")
         print("="*80)
     else:
         print("No questions were processed.")
