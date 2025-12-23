@@ -22,7 +22,8 @@ from compressors import (
     RefinerCompressor,
     RecompAbstractiveCompressor,
     RecompExtractiveCompressor,
-    LongLLMLinguaCompressor
+    LongLLMLinguaCompressor,
+    ProvenceCompressor
 )
 
 # --- Utility Functions (Adapted from your utils.py) ---
@@ -64,6 +65,8 @@ def get_compressor(method: str):
         return RecompExtractiveCompressor()
     elif method == "longllmlingua":
         return LongLLMLinguaCompressor()
+    elif method == "provence":
+        return ProvenceCompressor(device='cuda', threshold=0.1)
     else:
         raise ValueError(f"Unknown compression method: {method}")
 
@@ -275,7 +278,7 @@ def main():
     parser = argparse.ArgumentParser(description='End-to-End Benchmark Pipeline for Document Compression')
     parser.add_argument('--input', '-i', type=str, required=True, help='Input JSON file with questions and contexts.')
     parser.add_argument('--method', '-m', type=str, required=True, 
-                        choices=["compact", "exit", "refiner", "recomp_abstractive", "recomp_extractive", "longllmlingua"],
+                        choices=["compact", "exit", "refiner", "recomp_abstractive", "recomp_extractive", "longllmlingua", "provence"],
                         help="Compression method to use for the evaluation.")
     parser.add_argument('--reader_model_name', '-rm', type=str, default="meta-llama/Meta-Llama-3.1-8B-Instruct",
                         help="Hugging Face model name for the reader.")

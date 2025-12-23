@@ -16,7 +16,8 @@ from compressors import (
     RefinerCompressor,
     RecompAbstractiveCompressor,
     RecompExtractiveCompressor,
-    LongLLMLinguaCompressor
+    LongLLMLinguaCompressor,
+    ProvenceCompressor
 )
 
 from utils import (
@@ -52,6 +53,8 @@ def get_compressor(method: str):
         return RecompExtractiveCompressor()
     elif method == "longllmlingua":
         return LongLLMLinguaCompressor()
+    elif method == "provence":
+        return ProvenceCompressor(device='cuda', threshold=0.1)
     else:
         raise ValueError(f"Unknown compression method: {method}")
 
@@ -168,7 +171,7 @@ def main():
     parser = argparse.ArgumentParser(description='Context Compression Pipeline')
     parser.add_argument('--input', '-i', type=str, required=True, help='Input JSON file with questions and contexts.')
     parser.add_argument('--method', '-m', type=str, required=True, 
-                        choices=["compact", "exit", "refiner", "recomp_abstractive", "recomp_extractive", "longllmlingua"],
+                        choices=["compact", "exit", "refiner", "recomp_abstractive", "recomp_extractive", "longllmlingua", "provence"],
                         help="Compression method to use.")
     parser.add_argument('--k', '-k', type=int, default=10, help='Top k contexts to preprocess and compress.')
     parser.add_argument('--output', '-o', type=str, default=None, help='Output JSON file path. If not provided, auto-generated.')

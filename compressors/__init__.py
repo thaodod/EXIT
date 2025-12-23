@@ -7,6 +7,7 @@ from .baselines.refiner.compressor import RefinerCompressor
 from .baselines.recomp_abst.compressor import RecompAbstractiveCompressor
 from .baselines.recomp_extr.compressor import RecompExtractiveCompressor
 from .baselines.longllmlingua.compressor import LongLLMLinguaCompressor
+from .baselines.provence.compressor import ProvenceCompressor
 
 __all__ = [
     'BaseCompressor',
@@ -16,5 +17,6 @@ __all__ = [
     'RefinerCompressor',
     'RecompAbstractiveCompressor',
     'RecompExtractiveCompressor',
-    'LongLLMLinguaCompressor'
+    'LongLLMLinguaCompressor',
+    'ProvenceCompressor'
 ]
