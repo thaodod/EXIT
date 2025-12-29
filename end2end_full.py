@@ -33,7 +33,8 @@ from utils import (
     generate_answers_api,
     evaluate_batch,
     preprocess_contexts,
-    count_tokens
+    count_tokens,
+    filter_empty_predictions
 )
 
 warnings.filterwarnings("ignore")
@@ -322,6 +323,7 @@ def main():
     all_ground_truths = [item.get('answer') or item.get('answers') for item in questions_data]
 
     total_em, total_f1, total_count = 0, 0, 0
+    skipped_total = 0
     total_compress_time, total_generate_time = 0, 0
     total_original_tokens, total_compressed_tokens = 0, 0
     total_compress_flops = 0.0
@@ -334,6 +336,12 @@ def main():
         predictions, ground_truths, timing_info = pipeline.process_batch(
             batch_questions, batch_segments, batch_ground_truths
         )
+
+        if pipeline.use_api:
+            predictions, ground_truths, skipped = filter_empty_predictions(
+                predictions, ground_truths
+            )
+            skipped_total += skipped
         
         batch_results = evaluate_batch(predictions, ground_truths)
         
@@ -348,14 +356,16 @@ def main():
         total_compressed_tokens += timing_info['compressed_tokens']
         total_compress_flops += timing_info.get('compress_flops', 0.0)
 
-    if total_count > 0:
+    attempted_count = total_count + skipped_total
+    if attempted_count > 0:
         final_results = {
             'count': total_count,
-            'exact_match_percentage': 100.0 * total_em / total_count,
-            'f1_percentage': 100.0 * total_f1 / total_count
+            'skipped': skipped_total,
+            'exact_match_percentage': 100.0 * total_em / total_count if total_count > 0 else 0.0,
+            'f1_percentage': 100.0 * total_f1 / total_count if total_count > 0 else 0.0
         }
-        avg_compress_time = total_compress_time / total_count
-        avg_generate_time = total_generate_time / total_count
+        avg_compress_time = total_compress_time / attempted_count
+        avg_generate_time = total_generate_time / attempted_count
         avg_total_time = avg_compress_time + avg_generate_time
         compression_ratio = total_compressed_tokens / total_original_tokens if total_original_tokens > 0 else 0
 
@@ -369,7 +379,7 @@ def main():
         print(f"  Compression Ratio:  {compression_ratio:.3f}")
         # Report FLOPs if collected
         if args.profile_flops:
-            avg_flops_per_q = (total_compress_flops / total_count) if total_count > 0 else 0.0
+            avg_flops_per_q = (total_compress_flops / attempted_count) if attempted_count > 0 else 0.0
             # Present in GFLOPs for readability
             print(f"  Compression FLOPs (avg/question): {avg_flops_per_q/1e9:.3f} GFLOPs")
             print(f"  Compression FLOPs (total profiled): {total_compress_flops/1e9:.3f} GFLOPs")

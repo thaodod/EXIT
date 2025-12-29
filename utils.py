@@ -7,8 +7,8 @@ import regex
 import spacy
 import tiktoken
 from collections import Counter
-from typing import List, Union, Any, Dict
-from concurrent.futures import ThreadPoolExecutor
+from typing import List, Union, Any, Dict, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 
 # Load spaCy model for sentence segmentation
@@ -122,6 +122,8 @@ def print_evaluation_results(results: dict, title: str = "EVALUATION RESULTS"):
     print(title)
     print("="*80)
     print(f"Total Questions: {results['count']}")
+    if 'skipped' in results:
+        print(f"Skipped (no answer): {results['skipped']}")
     print(f"Exact Match: {results['exact_match_percentage']:.2f}%")
     print(f"F1 Score: {results['f1_percentage']:.2f}%")
     print("="*80)
@@ -162,14 +164,38 @@ def generate_answers_api(prompts: List[str], api_model: str, max_workers: int = 
     
     # Use ThreadPoolExecutor for parallel API calls
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        responses = list(tqdm(
-            executor.map(call_api_single, prompts),
+        responses = [""] * len(prompts)
+        future_to_idx = {
+            executor.submit(call_api_single, prompt): idx
+            for idx, prompt in enumerate(prompts)
+        }
+        for future in tqdm(
+            as_completed(future_to_idx),
             total=len(prompts),
             desc="Generating answers via API",
             leave=False,
-        ))
+        ):
+            idx = future_to_idx[future]
+            try:
+                responses[idx] = future.result()
+            except Exception as e:
+                print(f"Error in API call: {e}")
+                responses[idx] = ""
     
     return responses
+
+def filter_empty_predictions(predictions: List[str], ground_truths: List[Any]) -> Tuple[List[str], List[Any], int]:
+    """Filter out empty predictions and return filtered lists plus skipped count."""
+    filtered_pairs = [
+        (pred, gt)
+        for pred, gt in zip(predictions, ground_truths)
+        if pred and pred.strip()
+    ]
+    skipped = len(predictions) - len(filtered_pairs)
+    if not filtered_pairs:
+        return [], [], skipped
+    filtered_predictions, filtered_ground_truths = zip(*filtered_pairs)
+    return list(filtered_predictions), list(filtered_ground_truths), skipped
 
 def evaluate_batch(predictions: List[str], ground_truths: List[Any]) -> Dict[str, float]:
     """Evaluate a batch of predictions."""

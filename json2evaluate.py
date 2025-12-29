@@ -14,7 +14,8 @@ os.environ["TOKENIZERS_PARALLELISM"] = "true"
 from utils import (
     print_evaluation_results,
     generate_answers_api,
-    evaluate_batch
+    evaluate_batch,
+    filter_empty_predictions
 )
 
 warnings.filterwarnings("ignore")
@@ -126,6 +127,7 @@ class EvaluationPipeline:
         ground_truths = [item['ground_truth'] for item in compressed_data]
         
         total_em, total_f1, total_count = 0, 0, 0
+        skipped_total = 0
         
         # Process in batches
         for i in tqdm(range(0, len(prompts), batch_size), desc="Evaluating batches"):
@@ -134,6 +136,12 @@ class EvaluationPipeline:
             
             # Generate answers
             predictions = self.generate_answers(batch_prompts)
+
+            if self.use_api:
+                predictions, batch_ground_truths, skipped = filter_empty_predictions(
+                    predictions, batch_ground_truths
+                )
+                skipped_total += skipped
             
             # Evaluate batch
             batch_results = evaluate_batch(predictions, batch_ground_truths)
@@ -147,6 +155,7 @@ class EvaluationPipeline:
                 'count': total_count,
                 'exact_match': total_em,
                 'f1': total_f1,
+                'skipped': skipped_total,
                 'exact_match_percentage': 100.0 * total_em / total_count,
                 'f1_percentage': 100.0 * total_f1 / total_count
             }
@@ -155,6 +164,7 @@ class EvaluationPipeline:
                 'count': 0,
                 'exact_match': 0,
                 'f1': 0,
+                'skipped': skipped_total,
                 'exact_match_percentage': 0,
                 'f1_percentage': 0
             }
@@ -164,8 +174,8 @@ def main():
     parser.add_argument('--input', '-i', type=str, required=True, help='Input JSON file with compressed data.')
     parser.add_argument('--reader_model_name', '-rm', type=str, default="meta-llama/Meta-Llama-3.1-8B-Instruct",
                         help="Hugging Face model name for the reader.")
-    parser.add_argument('--batch_size', '-b', type=int, default=16, help='Batch size for evaluation.')
-    parser.add_argument('--reader_batch_size', '-rb', type=int, default=16, help='Batch size for the reader model.')
+    parser.add_argument('--batch_size', '-b', type=int, default=8, help='Batch size for evaluation.')
+    parser.add_argument('--reader_batch_size', '-rb', type=int, default=8, help='Batch size for the reader model.')
     parser.add_argument('--auto_dtype', '-ad', action='store_true', help='Use torch_dtype="auto" for reader model loading.')
     parser.add_argument('--api', '-api', type=str, default=None, help='Vertex AI model name. If set, uses API instead of local reader.')
 

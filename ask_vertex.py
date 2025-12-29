@@ -26,11 +26,12 @@ except Exception as e:
 def ask_vertex(prompt, 
                model=DEFAULT_MODEL,
                max_retries=10, 
-               retry_delay=3, 
+               retry_delay=2, 
                mock=False,
                temperature=0.0001,
                top_p=1.0,
-               max_output_tokens=360):
+               max_output_tokens=360,
+               request_timeout=(10, 120)):
     """ 
     Returns:
         Generated text response or None if failed
@@ -102,7 +103,8 @@ def ask_vertex(prompt,
                 response = requests.post(
                     'https://openrouter.ai/api/v1/chat/completions',
                     headers=headers,
-                    json=payload
+                    json=payload,
+                    timeout=request_timeout
                 )
                 
                 response.raise_for_status()
@@ -116,7 +118,7 @@ def ask_vertex(prompt,
                 print(f"Failed after {max_retries} attempts. Error: {str(e)}")
                 return None
             time.sleep(retry_delay)
-            retry_delay *= 1.2
+            retry_delay *= 1.05
 
 
 if __name__ == "__main__":
