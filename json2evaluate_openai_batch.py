@@ -6,7 +6,7 @@ import re
 import time
 import unicodedata
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import requests
 
@@ -545,6 +545,106 @@ def evaluate_predictions(
     }
 
 
+def format_prompt_api(question: str, context: str) -> str:
+    """Format prompt for API - same template as used in existing format."""
+    return (
+        f"Context information is: ```{context}```\n\n"
+        f"Given provided context (might not be sufficient for below query), "
+        f"answer the query without any explanation.\n"
+        f"Query: `{question}`\n"
+        f"Answer (in plain text):"
+    )
+
+
+def parse_method_and_k_from_filename(filename: str) -> Tuple[str, Optional[int]]:
+    """Parse method and k from filename.
+    
+    Expected pattern: {method}_k{N}_{dataset}.json
+    Returns: (method, k) or defaults if not matched
+    """
+    # Match patterns like exit_k20_HotpotQA.json, ours_k20_HotpotQA.json
+    match = re.search(r"^([^_]+)_k(\d+)_", filename)
+    if match:
+        return match.group(1), int(match.group(2))
+    return "unknown", None
+
+
+def detect_input_format(data: Any) -> str:
+    """Detect whether input is 'existing' or 'ours' format.
+    
+    - 'existing': dict with 'metadata' and 'data' keys
+    - 'ours': list of items with 'question', 'compressed_document', 'answer'
+    """
+    if isinstance(data, dict) and "metadata" in data and "data" in data:
+        return "existing"
+    if isinstance(data, list) and len(data) > 0:
+        first_item = data[0]
+        if isinstance(first_item, dict) and "compressed_document" in first_item:
+            return "ours"
+    raise ValueError(
+        "Unknown input format. Expected either:\n"
+        "  - 'existing' format: dict with 'metadata' and 'data' keys\n"
+        "  - 'ours' format: list with items containing 'compressed_document'"
+    )
+
+
+def normalize_input_data(
+    data: Any,
+    input_path: str,
+) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    """Normalize input data to a common format.
+    
+    Returns:
+        (metadata, data_items) where each data_item has:
+        - question
+        - prompt_api
+        - ground_truth
+    """
+    input_format = detect_input_format(data)
+    filename = Path(input_path).name
+    
+    if input_format == "existing":
+        # Already in the expected format
+        return data["metadata"], data["data"]
+    
+    elif input_format == "ours":
+        # Convert 'ours' format to normalized format
+        method, k = parse_method_and_k_from_filename(filename)
+        
+        normalized_items = []
+        for item in data:
+            question = item["question"]
+            context = item["compressed_document"]
+            ground_truth = item["answer"]
+            
+            # Reduce 3+ consecutive newlines to 1
+            context = re.sub(r"\n{3,}", "\n", context)
+            
+            # Generate prompt_api using the same template as existing format
+            prompt_api = format_prompt_api(question, context)
+            
+            normalized_items.append({
+                "question": question,
+                "prompt_api": prompt_api,
+                "ground_truth": ground_truth,
+            })
+        
+        metadata = {
+            "input_file": input_path,
+            "method": method,
+            "k": k if k is not None else "unknown",
+            "total_questions": len(data),
+            "compression_ratio": 0.0,
+            "total_original_tokens": 0,
+            "total_compressed_tokens": 0,
+        }
+        
+        return metadata, normalized_items
+    
+    else:
+        raise ValueError(f"Unknown input format: {input_format}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Evaluate compressed contexts using OpenAI Batch API."
@@ -660,9 +760,13 @@ def main() -> None:
     args = parser.parse_args()
 
     with open(args.input, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    metadata = data["metadata"]
-    compressed_data = data["data"]
+        raw_data = json.load(f)
+    
+    # Detect format and normalize to common structure
+    input_format = detect_input_format(raw_data)
+    print(f"Detected input format: {input_format}")
+    
+    metadata, compressed_data = normalize_input_data(raw_data, args.input)
 
     prompts_all = [item["prompt_api"] for item in compressed_data]
     ground_truths_all = [item["ground_truth"] for item in compressed_data]
@@ -680,7 +784,10 @@ def main() -> None:
     print(f"Method: {metadata['method']}")
     print(f"K: {metadata['k']}")
     print(f"Total questions: {metadata['total_questions']}")
-    print(f"Compression ratio: {metadata['compression_ratio']:.3f}")
+    if metadata['compression_ratio'] > 0:
+        print(f"Compression ratio: {metadata['compression_ratio']:.3f}")
+    else:
+        print(f"Compression ratio: N/A (original tokens not available)")
 
     output_dir = Path(args.output_dir)
     endpoint = args.endpoint or DEFAULT_ENDPOINT
@@ -728,8 +835,14 @@ def main() -> None:
                 )
 
         print("\nCOMPRESSION STATISTICS:")
-        print(f"  Compression Ratio: {metadata['compression_ratio']:.3f}")
-        print(f"  Original Tokens: {metadata['total_original_tokens']:,}")
+        if metadata['compression_ratio'] > 0:
+            print(f"  Compression Ratio: {metadata['compression_ratio']:.3f}")
+        else:
+            print("  Compression Ratio: N/A (original tokens not available)")
+        if metadata['total_original_tokens'] > 0:
+            print(f"  Original Tokens: {metadata['total_original_tokens']:,}")
+        else:
+            print("  Original Tokens: N/A")
         print(f"  Compressed Tokens: {metadata['total_compressed_tokens']:,}")
         print("=" * 80)
         return
@@ -886,8 +999,14 @@ def main() -> None:
             )
 
     print("\nCOMPRESSION STATISTICS:")
-    print(f"  Compression Ratio: {metadata['compression_ratio']:.3f}")
-    print(f"  Original Tokens: {metadata['total_original_tokens']:,}")
+    if metadata['compression_ratio'] > 0:
+        print(f"  Compression Ratio: {metadata['compression_ratio']:.3f}")
+    else:
+        print("  Compression Ratio: N/A (original tokens not available)")
+    if metadata['total_original_tokens'] > 0:
+        print(f"  Original Tokens: {metadata['total_original_tokens']:,}")
+    else:
+        print("  Original Tokens: N/A")
     print(f"  Compressed Tokens: {metadata['total_compressed_tokens']:,}")
     print("=" * 80)
 
