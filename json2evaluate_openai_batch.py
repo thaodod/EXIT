@@ -153,7 +153,7 @@ def build_request_body(
             "max_output_tokens": max_output_tokens,
         }
         if "gpt-5" in model.lower():
-            body["reasoning"] = {"effort": "minimal"}
+            body["reasoning"] = {"effort": "medium"}
             body["text"] = {"verbosity": "low"}
         return body
 
