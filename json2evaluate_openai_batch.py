@@ -14,7 +14,7 @@ from utils import evaluate_batch, print_evaluation_results
 
 DEFAULT_ENDPOINT = "/v1/responses"
 DEFAULT_MODEL = "gpt-5-mini"
-DEFAULT_MAX_OUTPUT_TOKENS = 1024
+DEFAULT_MAX_OUTPUT_TOKENS = 2048
 DEFAULT_POLL_INTERVAL = 30
 DEFAULT_COMPLETION_WINDOW = "24h"
 
@@ -153,7 +153,7 @@ def build_request_body(
             "max_output_tokens": max_output_tokens,
         }
         if "gpt-5" in model.lower():
-            body["reasoning"] = {"effort": "medium"}
+            body["reasoning"] = {"effort": "low"}
             body["text"] = {"verbosity": "low"}
         return body
 
