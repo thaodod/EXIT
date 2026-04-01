@@ -17,7 +17,7 @@ class EXITCompressor(BaseCompressor):
         device='cuda',
         cache_dir: str = "./cache",
         batch_size: int = 8,
-        threshold: float = 0.5
+        threshold: float = 0.6
     ):
         """Initialize EXIT compressor.
         
