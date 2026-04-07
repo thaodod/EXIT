@@ -20,15 +20,18 @@ from utils import (
 
 warnings.filterwarnings("ignore")
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-MAX_OUT_LENGTH = 120
+MAX_OUT_LENGTH = 256
 MAX_IN_LENGTH = 9216
 
 class EvaluationPipeline:
     def __init__(self, reader_model_name: str = None, reader_batch_size: int = 8,
-                 use_auto_dtype: bool = False, api_model: str = None):
+                 use_auto_dtype: bool = False, api_model: str = None,
+                 api_base_url: str = None, api_key: str = None):
         self.reader_batch_size = reader_batch_size
         self.use_api = api_model is not None
         self.api_model = api_model
+        self.api_base_url = api_base_url
+        self.api_key = api_key
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
@@ -57,7 +60,10 @@ class EvaluationPipeline:
             self.reader_model.eval()
             print("Reader model loaded successfully.")
         else:
-            print(f"Using Vertex AI API with model: {self.api_model}")
+            if self.api_base_url:
+                print(f"Using OpenAI-compatible API at {self.api_base_url} with model: {self.api_model}")
+            else:
+                print(f"Using configured API routing with model: {self.api_model}")
             self.reader_tokenizer = None
             self.reader_model = None
 
@@ -67,7 +73,14 @@ class EvaluationPipeline:
             return []
         
         if self.use_api:
-            return generate_answers_api(prompts, self.api_model, self.reader_batch_size, MAX_OUT_LENGTH)
+            return generate_answers_api(
+                prompts,
+                self.api_model,
+                self.reader_batch_size,
+                MAX_OUT_LENGTH,
+                api_base_url=self.api_base_url,
+                api_key=self.api_key,
+            )
         else:
             return self._generate_answers_local(prompts)
 
@@ -177,19 +190,35 @@ def main():
     parser.add_argument('--batch_size', '-b', type=int, default=8, help='Batch size for evaluation.')
     parser.add_argument('--reader_batch_size', '-rb', type=int, default=8, help='Batch size for the reader model.')
     parser.add_argument('--auto_dtype', '-ad', action='store_true', help='Use torch_dtype="auto" for reader model loading.')
-    parser.add_argument('--api', '-api', type=str, default=None, help='Vertex AI model name. If set, uses API instead of local reader.')
+    parser.add_argument('--api', '-api', type=str, default=None, help='API model name. If set, uses API instead of local reader.')
+    parser.add_argument(
+        '--api-base-url',
+        type=str,
+        default=None,
+        help='OpenAI-compatible API base URL, such as http://host:8004/v1 for a vLLM server.',
+    )
+    parser.add_argument(
+        '--api-key',
+        type=str,
+        default=None,
+        help='Optional API key for --api-base-url. If omitted, uses OPENAI_API_KEY or VLLM_API_KEY when available.',
+    )
 
     args = parser.parse_args()
 
     if args.api is None and args.reader_model_name is None:
         parser.error("Either --reader_model_name or --api must be provided.")
+    if args.api is None and (args.api_base_url is not None or args.api_key is not None):
+        parser.error("--api-base-url and --api-key require --api.")
 
     # Initialize evaluation pipeline
     pipeline = EvaluationPipeline(
         reader_model_name=args.reader_model_name,
         reader_batch_size=args.reader_batch_size,
         use_auto_dtype=args.auto_dtype,
-        api_model=args.api
+        api_model=args.api,
+        api_base_url=args.api_base_url,
+        api_key=args.api_key,
     )
 
     # Load compressed data

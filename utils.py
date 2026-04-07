@@ -7,7 +7,7 @@ import regex
 import spacy
 import tiktoken
 from collections import Counter
-from typing import List, Union, Any, Dict, Tuple
+from typing import List, Union, Any, Dict, Tuple, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 
@@ -146,8 +146,15 @@ def format_prompt(question: str, context: str, tokenizer=None, use_api: bool = F
             add_generation_prompt=True,
         )
 
-def generate_answers_api(prompts: List[str], api_model: str, max_workers: int = 8, max_output_tokens: int = 360) -> List[str]:
-    """Generate answers using Vertex AI API with parallel processing."""
+def generate_answers_api(
+    prompts: List[str],
+    api_model: str,
+    max_workers: int = 8,
+    max_output_tokens: int = 360,
+    api_base_url: Optional[str] = None,
+    api_key: Optional[str] = None,
+) -> List[str]:
+    """Generate answers using the configured API path with parallel processing."""
     from ask_vertex import ask_vertex
     
     def call_api_single(prompt):
@@ -156,6 +163,8 @@ def generate_answers_api(prompts: List[str], api_model: str, max_workers: int = 
                 prompt,
                 model=api_model,
                 max_output_tokens=max_output_tokens,
+                api_base_url=api_base_url,
+                api_key=api_key,
             )
             return response if response is not None else ""
         except Exception as e:
