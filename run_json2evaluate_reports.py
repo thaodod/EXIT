@@ -130,6 +130,8 @@ def compute_average_metrics(results: Sequence[Dict[str, Any]]) -> Dict[str, floa
     metric_keys = [
         "count",
         "skipped",
+        "failed_requests",
+        "empty_valid_answers",
         "exact_match",
         "f1",
         "exact_match_percentage",
@@ -139,12 +141,18 @@ def compute_average_metrics(results: Sequence[Dict[str, Any]]) -> Dict[str, floa
 
 
 def format_metric_block(results: Dict[str, Any]) -> List[str]:
-    return [
+    lines = [
         f"Questions evaluated: {int(round(results['count']))}",
-        f"Skipped (no answer): {results['skipped']:.2f}",
         f"Exact Match: {results['exact_match']:.2f} ({results['exact_match_percentage']:.2f}%)",
         f"F1: {results['f1']:.2f} ({results['f1_percentage']:.2f}%)",
     ]
+    if "failed_requests" in results:
+        lines.insert(1, f"Request failures (excluded): {results['failed_requests']:.2f}")
+    else:
+        lines.insert(1, f"Excluded from scoring: {results['skipped']:.2f}")
+    if "empty_valid_answers" in results:
+        lines.insert(2, f"Empty valid answers (counted): {results['empty_valid_answers']:.2f}")
+    return lines
 
 
 def build_report(

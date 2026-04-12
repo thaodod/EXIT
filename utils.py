@@ -2,6 +2,7 @@
 
 from typing import List
 import string
+import time
 import unicodedata
 import regex
 import spacy
@@ -121,9 +122,13 @@ def print_evaluation_results(results: dict, title: str = "EVALUATION RESULTS"):
     print("\n" + "="*80)
     print(title)
     print("="*80)
-    print(f"Total Questions: {results['count']}")
-    if 'skipped' in results:
-        print(f"Skipped (no answer): {results['skipped']}")
+    print(f"Questions Scored: {results['count']}")
+    if 'failed_requests' in results:
+        print(f"Request Failures (excluded): {results['failed_requests']}")
+    elif 'skipped' in results:
+        print(f"Excluded From Scoring: {results['skipped']}")
+    if 'empty_valid_answers' in results:
+        print(f"Empty Valid Answers (counted): {results['empty_valid_answers']}")
     print(f"Exact Match: {results['exact_match_percentage']:.2f}%")
     print(f"F1 Score: {results['f1_percentage']:.2f}%")
     print("="*80)
@@ -153,10 +158,45 @@ def generate_answers_api(
     max_output_tokens: int = 360,
     api_base_url: Optional[str] = None,
     api_key: Optional[str] = None,
-) -> List[str]:
+    return_metadata: bool = False,
+) -> List[Any]:
     """Generate answers using the configured API path with parallel processing."""
     from ask_vertex import ask_vertex
-    
+
+    def normalize_result(result: Any) -> Dict[str, Any]:
+        if isinstance(result, dict):
+            text = result.get("text", "")
+            return {
+                "text": text if isinstance(text, str) else "",
+                "ok": bool(result.get("ok")),
+                "finish_reason": result.get("finish_reason"),
+                "provider": result.get("provider"),
+                "error": result.get("error"),
+            }
+        if isinstance(result, str):
+            return {
+                "text": result,
+                "ok": True,
+                "finish_reason": None,
+                "provider": None,
+                "error": None,
+            }
+        return {
+            "text": "",
+            "ok": False,
+            "finish_reason": None,
+            "provider": None,
+            "error": f"Unexpected API result type: {type(result).__name__}",
+        }
+
+    def resolve_max_workers(prompt_count: int) -> int:
+        if prompt_count <= 0:
+            return 0
+        requested_workers = max(1, int(max_workers))
+        if api_model and "gemini-3" in api_model.lower():
+            requested_workers = min(requested_workers, 4)
+        return min(requested_workers, prompt_count)
+
     def call_api_single(prompt):
         try:
             response = ask_vertex(
@@ -165,33 +205,71 @@ def generate_answers_api(
                 max_output_tokens=max_output_tokens,
                 api_base_url=api_base_url,
                 api_key=api_key,
+                return_metadata=True,
             )
-            return response if response is not None else ""
+            return normalize_result(response)
         except Exception as e:
             print(f"Error in API call: {e}")
-            return ""
-    
-    # Use ThreadPoolExecutor for parallel API calls
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        responses = [""] * len(prompts)
-        future_to_idx = {
-            executor.submit(call_api_single, prompt): idx
-            for idx, prompt in enumerate(prompts)
-        }
-        for future in tqdm(
-            as_completed(future_to_idx),
-            total=len(prompts),
-            desc="Generating answers via API",
-            leave=False,
-        ):
-            idx = future_to_idx[future]
-            try:
-                responses[idx] = future.result()
-            except Exception as e:
-                print(f"Error in API call: {e}")
-                responses[idx] = ""
-    
-    return responses
+            return {
+                "text": "",
+                "ok": False,
+                "finish_reason": None,
+                "provider": None,
+                "error": str(e),
+            }
+
+    def run_parallel(batch_prompts: List[str], worker_count: int) -> List[Dict[str, Any]]:
+        if not batch_prompts:
+            return []
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            responses = [{} for _ in batch_prompts]
+            future_to_idx = {
+                executor.submit(call_api_single, prompt): idx
+                for idx, prompt in enumerate(batch_prompts)
+            }
+            for future in tqdm(
+                as_completed(future_to_idx),
+                total=len(batch_prompts),
+                desc="Generating answers via API",
+                leave=False,
+            ):
+                idx = future_to_idx[future]
+                try:
+                    responses[idx] = normalize_result(future.result())
+                except Exception as e:
+                    print(f"Error in API call: {e}")
+                    responses[idx] = {
+                        "text": "",
+                        "ok": False,
+                        "finish_reason": None,
+                        "provider": None,
+                        "error": str(e),
+                    }
+        return responses
+
+    worker_count = resolve_max_workers(len(prompts))
+    if worker_count == 0:
+        return []
+
+    responses = run_parallel(prompts, worker_count)
+
+    failed_indices = [idx for idx, result in enumerate(responses) if not result.get("ok")]
+    if failed_indices:
+        retry_prompts = [prompts[idx] for idx in failed_indices]
+        retry_worker_count = min(2, len(retry_prompts))
+        time.sleep(2.0)
+        retry_results = run_parallel(retry_prompts, retry_worker_count)
+        for idx, retry_result in zip(failed_indices, retry_results):
+            if retry_result.get("ok"):
+                responses[idx] = retry_result
+
+    if return_metadata:
+        return responses
+
+    return [
+        result.get("text", "") if result.get("ok") else ""
+        for result in responses
+    ]
 
 def filter_empty_predictions(predictions: List[str], ground_truths: List[Any]) -> Tuple[List[str], List[Any], int]:
     """Filter out empty predictions and return filtered lists plus skipped count."""
