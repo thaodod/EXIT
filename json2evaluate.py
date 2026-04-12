@@ -15,7 +15,6 @@ from utils import (
     print_evaluation_results,
     generate_answers_api,
     evaluate_batch,
-    filter_empty_predictions
 )
 
 warnings.filterwarnings("ignore")
@@ -67,7 +66,7 @@ class EvaluationPipeline:
             self.reader_tokenizer = None
             self.reader_model = None
 
-    def generate_answers(self, prompts: List[str]) -> List[str]:
+    def generate_answers(self, prompts: List[str], return_metadata: bool = False) -> List[Any]:
         """Generate answers using either a local model or an API."""
         if not prompts:
             return []
@@ -80,9 +79,22 @@ class EvaluationPipeline:
                 MAX_OUT_LENGTH,
                 api_base_url=self.api_base_url,
                 api_key=self.api_key,
+                return_metadata=return_metadata,
             )
         else:
-            return self._generate_answers_local(prompts)
+            responses = self._generate_answers_local(prompts)
+            if return_metadata:
+                return [
+                    {
+                        "text": response,
+                        "ok": True,
+                        "finish_reason": "LOCAL",
+                        "provider": "local",
+                        "error": None,
+                    }
+                    for response in responses
+                ]
+            return responses
 
     def _generate_answers_local(self, prompts: List[str]) -> List[str]:
         """Generate answers using the local reader model."""
@@ -140,7 +152,8 @@ class EvaluationPipeline:
         ground_truths = [item['ground_truth'] for item in compressed_data]
         
         total_em, total_f1, total_count = 0, 0, 0
-        skipped_total = 0
+        failed_requests_total = 0
+        empty_valid_answers_total = 0
         
         # Process in batches
         for i in tqdm(range(0, len(prompts), batch_size), desc="Evaluating batches"):
@@ -148,13 +161,27 @@ class EvaluationPipeline:
             batch_ground_truths = ground_truths[i:i + batch_size]
             
             # Generate answers
-            predictions = self.generate_answers(batch_prompts)
-
             if self.use_api:
-                predictions, batch_ground_truths, skipped = filter_empty_predictions(
-                    predictions, batch_ground_truths
+                prediction_results = self.generate_answers(batch_prompts, return_metadata=True)
+                failed_requests_total += sum(
+                    1 for result in prediction_results if not result.get("ok")
                 )
-                skipped_total += skipped
+                empty_valid_answers_total += sum(
+                    1
+                    for result in prediction_results
+                    if result.get("ok") and not result.get("text", "").strip()
+                )
+                filtered_pairs = [
+                    (result.get("text", ""), gt)
+                    for result, gt in zip(prediction_results, batch_ground_truths)
+                    if result.get("ok")
+                ]
+                if filtered_pairs:
+                    predictions, batch_ground_truths = map(list, zip(*filtered_pairs))
+                else:
+                    predictions, batch_ground_truths = [], []
+            else:
+                predictions = self.generate_answers(batch_prompts)
             
             # Evaluate batch
             batch_results = evaluate_batch(predictions, batch_ground_truths)
@@ -168,7 +195,9 @@ class EvaluationPipeline:
                 'count': total_count,
                 'exact_match': total_em,
                 'f1': total_f1,
-                'skipped': skipped_total,
+                'skipped': failed_requests_total,
+                'failed_requests': failed_requests_total,
+                'empty_valid_answers': empty_valid_answers_total,
                 'exact_match_percentage': 100.0 * total_em / total_count,
                 'f1_percentage': 100.0 * total_f1 / total_count
             }
@@ -177,7 +206,9 @@ class EvaluationPipeline:
                 'count': 0,
                 'exact_match': 0,
                 'f1': 0,
-                'skipped': skipped_total,
+                'skipped': failed_requests_total,
+                'failed_requests': failed_requests_total,
+                'empty_valid_answers': empty_valid_answers_total,
                 'exact_match_percentage': 0,
                 'f1_percentage': 0
             }
