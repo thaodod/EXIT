@@ -11,13 +11,8 @@ from concurrent.futures import ProcessPoolExecutor
 
 from compressors import (
     SearchResult,
-    CompActCompressor,
-    EXITCompressor,
-    RefinerCompressor,
-    RecompAbstractiveCompressor,
-    RecompExtractiveCompressor,
-    LongLLMLinguaCompressor,
-    ProvenceCompressor
+    SUPPORTED_METHODS,
+    get_compressor,
 )
 
 from utils import (
@@ -37,26 +32,6 @@ try:
 except IOError:
     print("Spacy model not found. Please run 'python -m spacy download en_core_web_sm'")
     exit()
-
-def get_compressor(method: str):
-    """Factory function to initialize and return a compressor instance."""
-    print(f"Initializing compressor for method: {method}")
-    if method == "compact":
-        return CompActCompressor(model_dir='cwyoon99/CompAct-7b', device='cuda')
-    elif method == "exit":
-        return EXITCompressor(checkpoint="doubleyyh/exit-gemma-2b", device='cuda')
-    elif method == "refiner":
-        return RefinerCompressor()
-    elif method == "recomp_abstractive":
-        return RecompAbstractiveCompressor()
-    elif method == "recomp_extractive":
-        return RecompExtractiveCompressor()
-    elif method == "longllmlingua":
-        return LongLLMLinguaCompressor()
-    elif method == "provence":
-        return ProvenceCompressor(device='cuda', threshold=0.1)
-    else:
-        raise ValueError(f"Unknown compression method: {method}")
 
 def preprocess_single_question(question_data_with_k: Tuple[Dict, int]) -> List[Dict]:
     """Preprocess contexts for a single question. Used for parallel processing."""
@@ -171,7 +146,7 @@ def main():
     parser = argparse.ArgumentParser(description='Context Compression Pipeline')
     parser.add_argument('--input', '-i', type=str, required=True, help='Input JSON file with questions and contexts.')
     parser.add_argument('--method', '-m', type=str, required=True, 
-                        choices=["compact", "exit", "refiner", "recomp_abstractive", "recomp_extractive", "longllmlingua", "provence"],
+                        choices=SUPPORTED_METHODS,
                         help="Compression method to use.")
     parser.add_argument('--k', '-k', type=int, default=10, help='Top k contexts to preprocess and compress.')
     parser.add_argument('--output', '-o', type=str, default=None, help='Output JSON file path. If not provided, auto-generated.')
