@@ -92,7 +92,7 @@ class AttnCompCompressor:
         question: str,
         chunks: Sequence[str | Mapping[str, Any]],
         *,
-        p: float = 0.9,
+        p: float = 0.86,
         epsilon: float = 1e-2,
     ) -> CompressionResult:
         chunks = list(chunks)
