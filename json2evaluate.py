@@ -19,7 +19,7 @@ from utils import (
 
 warnings.filterwarnings("ignore")
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-MAX_OUT_LENGTH = 256
+MAX_OUT_LENGTH = 1024
 MAX_IN_LENGTH = 9216
 
 class EvaluationPipeline:
