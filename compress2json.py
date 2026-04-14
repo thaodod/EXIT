@@ -66,6 +66,18 @@ def generate_output_path(input_path: str, method: str, k: int) -> str:
     
     return output_path
 
+def resolve_output_path(input_path: str, method: str, k: int, output_arg: str | None) -> str:
+    """Resolve output path, allowing the user to pass either a file or directory."""
+    if output_arg is None:
+        return generate_output_path(input_path, method, k)
+
+    output_is_dir = output_arg.endswith(os.sep) or os.path.isdir(output_arg)
+    if output_is_dir:
+        filename = os.path.basename(generate_output_path(input_path, method, k))
+        return os.path.join(output_arg, filename)
+
+    return output_arg
+
 class CompressionPipeline:
     def __init__(self, method: str, k: int = 10):
         self.k = k
@@ -153,9 +165,7 @@ def main():
 
     args = parser.parse_args()
 
-    # Generate output path if not provided
-    if args.output is None:
-        args.output = generate_output_path(args.input, args.method, args.k)
+    args.output = resolve_output_path(args.input, args.method, args.k, args.output)
     
     print(f"Output will be saved to: {args.output}")
 
@@ -188,7 +198,8 @@ def main():
     }
     
     # Save compressed data
-    os.makedirs(os.path.dirname(args.output), exist_ok=True)
+    output_dir = os.path.dirname(args.output) or "."
+    os.makedirs(output_dir, exist_ok=True)
     with open(args.output, 'w') as f:
         json.dump(output_data, f, indent=2)
     

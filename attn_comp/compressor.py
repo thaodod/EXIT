@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import torch
+from huggingface_hub import snapshot_download
 from transformers import AutoConfig, AutoModel, AutoTokenizer
 
 from .attention import PrunedLlamaAttention
@@ -52,6 +53,7 @@ class AttnCompCompressor:
         self.window_size = window_size
         self.num_heads = num_heads
         self.checkpoint_path = self._resolve_checkpoint_path(checkpoint_path)
+        model_name_or_path = self._resolve_model_name_or_path(model_name_or_path)
 
         base_config = AutoConfig.from_pretrained(model_name_or_path, local_files_only=local_files_only)
         truncated_config = base_config.to_dict()
@@ -301,3 +303,33 @@ class AttnCompCompressor:
         if checkpoint_path is not None:
             return Path(checkpoint_path).expanduser().resolve()
         return Path(__file__).resolve().parent / "checkpoints" / DEFAULT_CHECKPOINT_NAME
+
+    @staticmethod
+    def _resolve_model_name_or_path(model_name_or_path: str | Path) -> str:
+        candidate_path = Path(model_name_or_path).expanduser()
+        if candidate_path.exists():
+            return str(candidate_path.resolve())
+
+        try:
+            cached_snapshot = snapshot_download(
+                repo_id=str(model_name_or_path),
+                local_files_only=True,
+            )
+        except Exception:
+            return str(model_name_or_path)
+
+        snapshot_path = Path(cached_snapshot)
+        required_files = (
+            "config.json",
+            "tokenizer_config.json",
+            "tokenizer.json",
+            "model.safetensors.index.json",
+        )
+        if all((snapshot_path / name).exists() for name in required_files):
+            print(
+                f"Using cached Hugging Face snapshot for {model_name_or_path}: "
+                f"{snapshot_path}"
+            )
+            return str(snapshot_path)
+
+        return str(model_name_or_path)
