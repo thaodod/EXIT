@@ -18,12 +18,28 @@ DEFAULT_VERTEX_PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT", "savefiles-18521
 DEFAULT_VERTEX_LOCATION = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
 _VERTEX_CLIENTS: Dict[Tuple[str, str, int], Any] = {}
 _THINK_BLOCK_RE = re.compile(
-    r"^\s*<(?:think|thinking)>\s*.*?\s*</(?:think|thinking)>\s*",
+    r"^\s*<(?:think|thinking|reasoning|analysis)>\s*.*?\s*</(?:think|thinking|reasoning|analysis)>\s*",
     flags=re.IGNORECASE | re.DOTALL,
 )
-_ANSWER_PREFIX_RE = re.compile(
-    r"^\s*(?:final\s+answer|answer)\s*[:\-]\s*",
+_THINK_FENCE_RE = re.compile(
+    r"^\s*```(?:think|thinking|reasoning|analysis)\s*\n.*?\n```\s*",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+_INLINE_ANSWER_RE = re.compile(
+    r"^\s*(?:[-*]\s+|#+\s*)?(?:\*\*|__)?(?:final\s+answer|answer)(?:\*\*|__)?[ \t]*[:\-][ \t]*(.+?)\s*$",
+    flags=re.IGNORECASE | re.MULTILINE,
+)
+_ANSWER_LABEL_RE = re.compile(
+    r"^\s*(?:[-*]\s+|#+\s*)?(?:\*\*|__)?(?:final\s+answer|answer)(?:\*\*|__)?[ \t]*[:\-]?[ \t]*$",
+    flags=re.IGNORECASE | re.MULTILINE,
+)
+_LEADING_ANSWER_PREFIX_RE = re.compile(
+    r"^\s*(?:[-*]\s+|#+\s*)?(?:\*\*|__)?(?:final\s+answer|answer)(?:\*\*|__)?[ \t]*[:\-]?[ \t]*",
     flags=re.IGNORECASE,
+)
+_WRAPPED_FENCE_RE = re.compile(
+    r"^\s*```(?:text|plaintext|markdown)?\s*\n?(.*?)\n?```\s*$",
+    flags=re.IGNORECASE | re.DOTALL,
 )
 
 
@@ -122,14 +138,41 @@ def _sanitize_model_answer(text: str) -> str:
     if not isinstance(text, str):
         return ""
 
-    cleaned = text.strip()
-    while True:
-        updated = _THINK_BLOCK_RE.sub("", cleaned, count=1).strip()
-        if updated == cleaned:
-            break
-        cleaned = updated
+    def strip_leading_reasoning_artifacts(value: str) -> str:
+        cleaned_value = value.strip()
+        while True:
+            updated = _THINK_BLOCK_RE.sub("", cleaned_value, count=1).strip()
+            updated = _THINK_FENCE_RE.sub("", updated, count=1).strip()
+            if updated == cleaned_value:
+                return cleaned_value
+            cleaned_value = updated
 
-    cleaned = _ANSWER_PREFIX_RE.sub("", cleaned, count=1).strip()
+    def extract_explicit_answer(value: str) -> Optional[str]:
+        inline_matches = [
+            match.group(1).strip()
+            for match in _INLINE_ANSWER_RE.finditer(value)
+            if match.group(1).strip()
+        ]
+        if inline_matches:
+            return inline_matches[-1]
+
+        label_matches = list(_ANSWER_LABEL_RE.finditer(value))
+        if not label_matches:
+            return None
+
+        trailing_text = value[label_matches[-1].end():].strip()
+        return trailing_text or None
+
+    cleaned = strip_leading_reasoning_artifacts(text)
+    explicit_answer = extract_explicit_answer(cleaned)
+    if explicit_answer:
+        cleaned = explicit_answer
+
+    cleaned = strip_leading_reasoning_artifacts(cleaned)
+    cleaned = _LEADING_ANSWER_PREFIX_RE.sub("", cleaned, count=1).strip()
+    wrapped_match = _WRAPPED_FENCE_RE.fullmatch(cleaned)
+    if wrapped_match:
+        cleaned = wrapped_match.group(1).strip()
     return cleaned
 
 
