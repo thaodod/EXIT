@@ -51,15 +51,15 @@ printf 'Using model path: %s\n' "$ATTN_COMP_MODEL_NAME_OR_PATH"
 printf 'Using checkpoint: %s\n' "$ATTN_COMP_CHECKPOINT_PATH"
 printf 'Saving outputs to: %s\n' "$OUTPUT_DIR"
 
-run_job 2wikimultihop retrieved/contriever-msmarco_2wikimultihop/dev.json 5
+run_job 2wikimultihop retrieved/contriever-msmarco_2wikimultihop/dev.json 10
 run_job 2wikimultihop retrieved/contriever-msmarco_2wikimultihop/dev.json 20
-run_job HotpotQA retrieved/contriever-msmarco_HotpotQA/dev.json 5
+run_job HotpotQA retrieved/contriever-msmarco_HotpotQA/dev.json 10
 run_job HotpotQA retrieved/contriever-msmarco_HotpotQA/dev.json 20
-run_job musique retrieved/contriever-msmarco_musique/dev.json 5
+run_job musique retrieved/contriever-msmarco_musique/dev.json 10
 run_job musique retrieved/contriever-msmarco_musique/dev.json 20
-run_job NQ retrieved/contriever-msmarco_NQ/dev.json 5
+run_job NQ retrieved/contriever-msmarco_NQ/dev.json 10
 run_job NQ retrieved/contriever-msmarco_NQ/dev.json 20
-run_job TQA retrieved/contriever-msmarco_TQA/test.json 5
+run_job TQA retrieved/contriever-msmarco_TQA/test.json 10
 run_job TQA retrieved/contriever-msmarco_TQA/test.json 20
 
 printf 'All compression jobs finished.\n'

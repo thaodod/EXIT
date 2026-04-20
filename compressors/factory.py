@@ -67,7 +67,7 @@ def get_compressor(method: str) -> BaseCompressor:
                 "meta-llama/Meta-Llama-3.1-8B-Instruct",
             ),
             checkpoint_path=os.getenv("ATTN_COMP_CHECKPOINT_PATH") or None,
-            p=float(os.getenv("ATTN_COMP_P", "0.7")),
+            p=float(os.getenv("ATTN_COMP_P", "0.74")),
             epsilon=float(os.getenv("ATTN_COMP_EPSILON", "1e-2")),
             local_files_only=_get_bool_env("ATTN_COMP_LOCAL_FILES_ONLY", False),
         )

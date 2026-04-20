@@ -12,7 +12,7 @@ def main() -> None:
     parser.add_argument("--checkpoint", default=None, help="Optional override for the bundled attention checkpoint")
     parser.add_argument("--layer", type=int, default=13)
     parser.add_argument("--window-size", type=int, default=32)
-    parser.add_argument("--p", type=float, default=0.7)
+    parser.add_argument("--p", type=float, default=0.74)
     parser.add_argument("--epsilon", type=float, default=1e-2)
     parser.add_argument("--local-files-only", action="store_true")
     parser.add_argument("--json", action="store_true", help="Print the full result as JSON")

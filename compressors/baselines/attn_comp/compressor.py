@@ -18,7 +18,7 @@ class AttnCompCompressor(BaseCompressor):
         model_name_or_path: str = "meta-llama/Meta-Llama-3.1-8B-Instruct",
         checkpoint_path: str | Path | None = None,
         *,
-        p: float = 0.7,
+        p: float = 0.74,
         epsilon: float = 1e-2,
         layer: int = 13,
         window_size: int = 32,
