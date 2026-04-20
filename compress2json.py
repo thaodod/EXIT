@@ -2,8 +2,6 @@
 import json
 import argparse
 import os
-import spacy
-import torch
 from typing import List, Dict, Tuple
 from tqdm import tqdm
 import warnings
@@ -18,27 +16,34 @@ from compressors import (
 from utils import (
     format_prompt,
     preprocess_contexts,
-    count_tokens
+    count_tokens,
+    nlp as DEFAULT_NLP,
 )
 
 warnings.filterwarnings("ignore")
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
-# Load spaCy model for sentence segmentation once
-try:
-    nlp = spacy.load("en_core_web_sm", exclude=['tagger', 'parser', 'ner', 'lemmatizer', 'tok2vec'])
-    nlp.enable_pipe("senter")
-except IOError:
-    print("Spacy model not found. Please run 'python -m spacy download en_core_web_sm'")
-    exit()
+
+def get_preprocess_worker_count() -> int:
+    """Return a bounded worker count for CPU-only context preprocessing."""
+    cpu_count = os.cpu_count() or 1
+    env_value = os.getenv("PREPROCESS_WORKERS")
+    if env_value is not None:
+        try:
+            worker_count = int(env_value)
+        except ValueError as exc:
+            raise ValueError("PREPROCESS_WORKERS must be a positive integer") from exc
+        if worker_count < 1:
+            raise ValueError("PREPROCESS_WORKERS must be a positive integer")
+        return worker_count
+
+    return min(16, cpu_count)
 
 def preprocess_single_question(question_data_with_k: Tuple[Dict, int]) -> List[Dict]:
     """Preprocess contexts for a single question. Used for parallel processing."""
     question_data, k = question_data_with_k
-    local_nlp = spacy.load("en_core_web_sm", exclude=['tagger', 'parser', 'ner', 'lemmatizer', 'tok2vec'])
-    local_nlp.enable_pipe("senter")
-    return preprocess_contexts(question_data, k, local_nlp)
+    return preprocess_contexts(question_data, k, DEFAULT_NLP)
 
 def extract_dataset_name(input_path: str) -> str:
     """Extract dataset name from input path."""
@@ -80,18 +85,24 @@ def resolve_output_path(input_path: str, method: str, k: int, output_arg: str | 
 
 class CompressionPipeline:
     def __init__(self, method: str, k: int = 10):
+        self.method = method
         self.k = k
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
-        # Initialize the selected compressor
-        self.compressor = get_compressor(method)
-        print(f"Compressor '{self.compressor.__class__.__name__}' loaded.")
+        self.compressor = None
+
+    def _ensure_compressor_loaded(self):
+        if self.compressor is None:
+            # Load the GPU compressor only after CPU preprocessing finishes.
+            # Forking ProcessPoolExecutor workers after CUDA/model init can hang.
+            self.compressor = get_compressor(self.method)
+            print(f"Compressor '{self.compressor.__class__.__name__}' loaded.", flush=True)
+        return self.compressor
 
     def preprocess_all_questions(self, questions: List[Dict]) -> List[List[Dict]]:
         """Preprocess all questions in parallel using CPU processes."""
-        print("Preprocessing all questions...")
+        worker_count = get_preprocess_worker_count()
+        print(f"Preprocessing all questions with {worker_count} workers...")
         questions_with_k = [(q, self.k) for q in questions]
-        with ProcessPoolExecutor(max_workers=os.cpu_count()) as executor:
+        with ProcessPoolExecutor(max_workers=worker_count) as executor:
             preprocessed_segments = list(tqdm(
                 executor.map(preprocess_single_question, questions_with_k),
                 total=len(questions),
@@ -101,6 +112,7 @@ class CompressionPipeline:
 
     def compress_and_format(self, questions_data: List[Dict], preprocessed_segments: List[List[Dict]]) -> Tuple[List[Dict], Dict[str, float]]:
         """Compress contexts and format prompts for all questions."""
+        compressor = self._ensure_compressor_loaded()
         compressed_data = []
         total_original_tokens = 0
         total_compressed_tokens = 0
@@ -123,7 +135,7 @@ class CompressionPipeline:
             ]
             
             # Perform compression
-            compressed_docs = self.compressor.compress(question, search_results)
+            compressed_docs = compressor.compress(question, search_results)
             
             # Combine compressed text into a final document
             final_document = "\n".join(doc.text for doc in compressed_docs)
