@@ -9,7 +9,7 @@ from statistics import mean
 from typing import Any, Dict, List, Sequence
 
 
-DEFAULT_BATCH_SIZES = (4, 8, 10)
+DEFAULT_BATCH_SIZES = (4, 8)
 DEFAULT_READER_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct"
 
 
