@@ -2,8 +2,9 @@
 import json
 import argparse
 import os
+import re
 import torch
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 from tqdm import tqdm
 import warnings
 
@@ -15,12 +16,107 @@ from utils import (
     print_evaluation_results,
     generate_answers_api,
     evaluate_batch,
+    format_prompt,
 )
 
 warnings.filterwarnings("ignore")
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 MAX_OUT_LENGTH = 1024
 MAX_IN_LENGTH = 9216
+
+
+def parse_method_and_k_from_filename(input_path: str) -> Tuple[str, Any]:
+    """Infer method and k from names like ours_k20_NQ.json."""
+    filename = os.path.basename(input_path)
+    match = re.match(r"^(.+)_k(\d+)_", filename)
+    if not match:
+        return "unknown", "unknown"
+    return match.group(1), int(match.group(2))
+
+
+def is_ours_filename(input_path: str) -> bool:
+    """Return whether the file basename marks an external ours output."""
+    return "ours" in os.path.basename(input_path).lower()
+
+
+def normalize_compressed_input(data: Any, input_path: str) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    """Normalize supported compressed JSON formats for evaluation.
+
+    Existing compressor outputs already contain metadata/data and are returned
+    unchanged. External list-style outputs are only accepted for filenames that
+    contain "ours", and are adapted from question/compressed_document/answer(s)
+    into the evaluator's prompt format.
+    """
+    if isinstance(data, dict) and "metadata" in data and "data" in data:
+        if not isinstance(data["data"], list):
+            raise ValueError(f"{input_path} has invalid 'data'; expected a list.")
+        return data["metadata"], data["data"]
+
+    if isinstance(data, list):
+        if not is_ours_filename(input_path):
+            raise ValueError(
+                f"{input_path} is a list-style compressed file, but only external "
+                "files with 'ours' in the filename are supported by this adapter."
+            )
+
+        method, k = parse_method_and_k_from_filename(input_path)
+        normalized_data = []
+
+        for index, item in enumerate(data):
+            if not isinstance(item, dict):
+                raise ValueError(f"{input_path} item {index} must be an object.")
+
+            question = item.get("question")
+            context = item.get("compressed_document", item.get("compressed_context"))
+            if question is None or context is None:
+                raise ValueError(
+                    f"{input_path} item {index} must contain 'question' and "
+                    "'compressed_document' or 'compressed_context'."
+                )
+
+            if "ground_truth" in item:
+                ground_truth = item["ground_truth"]
+            elif "answer" in item:
+                ground_truth = item["answer"]
+            elif "answers" in item:
+                ground_truth = item["answers"]
+            else:
+                raise ValueError(
+                    f"{input_path} item {index} must contain 'answer', 'answers', "
+                    "or 'ground_truth'."
+                )
+
+            prompt_api = item.get("prompt_api")
+            if prompt_api is None:
+                prompt_api = format_prompt(question, context, None, use_api=True)
+
+            normalized_item = {
+                "question": question,
+                "compressed_context": context,
+                "prompt_api": prompt_api,
+                "ground_truth": ground_truth,
+            }
+            for optional_key in ("original_tokens", "compressed_tokens"):
+                if optional_key in item:
+                    normalized_item[optional_key] = item[optional_key]
+            normalized_data.append(normalized_item)
+
+        metadata = {
+            "input_file": input_path,
+            "method": method,
+            "k": k,
+            "total_questions": len(normalized_data),
+            "compression_ratio": "unknown",
+            "total_original_tokens": "unknown",
+            "total_compressed_tokens": "unknown",
+        }
+        return metadata, normalized_data
+
+    raise ValueError(
+        f"{input_path} must be either an object with top-level 'metadata' and "
+        "'data' keys, or a list of external compressed records."
+    )
+
 
 class EvaluationPipeline:
     def __init__(self, reader_model_name: str = None, reader_batch_size: int = 8,
@@ -256,14 +352,18 @@ def main():
     with open(args.input, 'r') as f:
         data = json.load(f)
     
-    metadata = data['metadata']
-    compressed_data = data['data']
+    metadata, compressed_data = normalize_compressed_input(data, args.input)
     
     print(f"Loaded compressed data from: {args.input}")
     print(f"Method: {metadata['method']}")
     print(f"K: {metadata['k']}")
     print(f"Total questions: {metadata['total_questions']}")
-    print(f"Compression ratio: {metadata['compression_ratio']:.3f}")
+    compression_ratio = metadata["compression_ratio"]
+    if isinstance(compression_ratio, (int, float)):
+        compression_ratio_text = f"{compression_ratio:.3f}"
+    else:
+        compression_ratio_text = str(compression_ratio)
+    print(f"Compression ratio: {compression_ratio_text}")
     
     # Evaluate
     results = pipeline.evaluate_compressed_data(compressed_data, args.batch_size)
@@ -273,9 +373,17 @@ def main():
     print_evaluation_results(results, title)
     
     print(f"\nCOMPRESSION STATISTICS:")
-    print(f"  Compression Ratio: {metadata['compression_ratio']:.3f}")
-    print(f"  Original Tokens: {metadata['total_original_tokens']:,}")
-    print(f"  Compressed Tokens: {metadata['total_compressed_tokens']:,}")
+    print(f"  Compression Ratio: {compression_ratio_text}")
+    original_tokens = metadata["total_original_tokens"]
+    compressed_tokens = metadata["total_compressed_tokens"]
+    original_tokens_text = (
+        f"{original_tokens:,}" if isinstance(original_tokens, int) else str(original_tokens)
+    )
+    compressed_tokens_text = (
+        f"{compressed_tokens:,}" if isinstance(compressed_tokens, int) else str(compressed_tokens)
+    )
+    print(f"  Original Tokens: {original_tokens_text}")
+    print(f"  Compressed Tokens: {compressed_tokens_text}")
     print("="*80)
 
 if __name__ == "__main__":

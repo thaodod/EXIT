@@ -114,16 +114,13 @@ def list_json_files(input_dir: Path) -> List[Path]:
 
 
 def load_experiment(path: Path) -> Dict[str, Any]:
+    from json2evaluate import normalize_compressed_input
+
     with path.open("r", encoding="utf-8") as handle:
         data = json.load(handle)
 
-    if "metadata" not in data or "data" not in data:
-        raise ValueError(f"{path} must contain top-level 'metadata' and 'data' keys.")
-
-    if not isinstance(data["data"], list):
-        raise ValueError(f"{path} has invalid 'data'; expected a list.")
-
-    return data
+    metadata, compressed_data = normalize_compressed_input(data, str(path))
+    return {"metadata": metadata, "data": compressed_data}
 
 
 def compute_average_metrics(results: Sequence[Dict[str, Any]]) -> Dict[str, float]:
