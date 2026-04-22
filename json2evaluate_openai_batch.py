@@ -548,11 +548,14 @@ def evaluate_predictions(
 def format_prompt_api(question: str, context: str) -> str:
     """Format prompt for API - same template as used in existing format."""
     return (
-        f"Context information is: ```{context}```\n\n"
-        f"Given provided context (might not be sufficient for below query), "
-        f"answer the query without any explanation.\n"
-        f"Query: `{question}`\n"
-        f"Answer (in plain text):"
+        f"Context information is:\n```{context}```\n\n"
+        "Answer the query using only the provided context.\n"
+        "If the context is empty or does not contain enough information to answer the query, "
+        "the final answer should be: I don't know\n\n"
+        "Do not use outside knowledge.\n"
+        "Do not include explanation, markdown, bullet points, or styling in the final answer.\n\n"
+        f"Query: `{question}`\n\n"
+        "Final answer (in plain text):"
     )
 
 

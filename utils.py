@@ -136,13 +136,23 @@ def print_evaluation_results(results: dict, title: str = "EVALUATION RESULTS"):
 
 def format_prompt(question: str, context: str, tokenizer=None, use_api: bool = False) -> str:
     """Format prompt for both local model and API."""
+    prompt_content = (
+        f"Context information is:\n```{context}```\n\n"
+        "Answer the query using only the provided context.\n"
+        "If the context is empty or does not contain enough information to answer the query, "
+        "the final answer should be: I don't know\n\n"
+        "Do not use outside knowledge.\n"
+        "Do not include explanation, markdown, bullet points, or styling in the final answer.\n\n"
+        f"Query: `{question}`\n\n"
+        "Final answer (in plain text):"
+    )
     if use_api:
         # Simple format for API
-        return f"Context information is: ```{context}```\n\nGiven provided context (might not be sufficient for below query), answer the query without any explanation.\nQuery: `{question}`\nAnswer (in plain text):"
+        return prompt_content
     else:
         # Chat template format for local model
         messages = [
-            {"role": "user", "content": f"Context information is: ```{context}```\n\nGiven provided context (might not be sufficient for below query), answer the query without any explanation.\nQuery: `{question}`\nAnswer (in plain text):"}
+            {"role": "user", "content": prompt_content}
         ]
         
         return tokenizer.apply_chat_template(
