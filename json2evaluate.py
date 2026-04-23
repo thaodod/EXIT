@@ -121,12 +121,14 @@ def normalize_compressed_input(data: Any, input_path: str) -> Tuple[Dict[str, An
 class EvaluationPipeline:
     def __init__(self, reader_model_name: str = None, reader_batch_size: int = 8,
                  use_auto_dtype: bool = False, api_model: str = None,
-                 api_base_url: str = None, api_key: str = None):
+                 api_base_url: str = None, api_key: str = None,
+                 openrouter_thinking: bool = False):
         self.reader_batch_size = reader_batch_size
         self.use_api = api_model is not None
         self.api_model = api_model
         self.api_base_url = api_base_url
         self.api_key = api_key
+        self.openrouter_thinking = openrouter_thinking
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
@@ -175,6 +177,7 @@ class EvaluationPipeline:
                 MAX_OUT_LENGTH,
                 api_base_url=self.api_base_url,
                 api_key=self.api_key,
+                openrouter_thinking=self.openrouter_thinking,
                 return_metadata=return_metadata,
             )
         else:
@@ -319,6 +322,11 @@ def main():
     parser.add_argument('--auto_dtype', '-ad', action='store_true', help='Use torch_dtype="auto" for reader model loading.')
     parser.add_argument('--api', '-api', type=str, default=None, help='API model name. If set, uses API instead of local reader.')
     parser.add_argument(
+        '--openrouter-thinking',
+        action='store_true',
+        help='Enable OpenRouter thinking/reasoning. Disabled by default.',
+    )
+    parser.add_argument(
         '--api-base-url',
         type=str,
         default=None,
@@ -346,6 +354,7 @@ def main():
         api_model=args.api,
         api_base_url=args.api_base_url,
         api_key=args.api_key,
+        openrouter_thinking=args.openrouter_thinking,
     )
 
     # Load compressed data

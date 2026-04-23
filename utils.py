@@ -158,6 +158,7 @@ def generate_answers_api(
     max_output_tokens: int = 360,
     api_base_url: Optional[str] = None,
     api_key: Optional[str] = None,
+    openrouter_thinking: bool = False,
     return_metadata: bool = False,
 ) -> List[Any]:
     """Generate answers using the configured API path with parallel processing."""
@@ -205,6 +206,7 @@ def generate_answers_api(
                 max_output_tokens=max_output_tokens,
                 api_base_url=api_base_url,
                 api_key=api_key,
+                openrouter_thinking=openrouter_thinking,
                 return_metadata=True,
             )
             return normalize_result(response)

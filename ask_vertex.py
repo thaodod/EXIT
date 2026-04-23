@@ -16,6 +16,7 @@ except ImportError:
 DEFAULT_MODEL = "gemini-3-flash-preview"
 DEFAULT_VERTEX_PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT", "savefiles-185217")
 DEFAULT_VERTEX_LOCATION = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
+OPENROUTER_REASONING_MAX_TOKENS = 1024
 _VERTEX_CLIENTS: Dict[Tuple[str, str, int], Any] = {}
 _THINK_BLOCK_RE = re.compile(
     r"^\s*<(?:think|thinking|reasoning|analysis)>\s*.*?\s*</(?:think|thinking|reasoning|analysis)>\s*",
@@ -134,6 +135,20 @@ def _get_vertex_client(timeout_ms: int):
     return client
 
 
+def _build_openrouter_reasoning(enable_thinking: bool) -> Dict[str, Any]:
+    if not enable_thinking:
+        return {
+            "effort": "none",
+            "exclude": True,
+        }
+    # OpenRouter accepts either reasoning.effort or reasoning.max_tokens, not both.
+    # Qwen Flash supports the fixed budget path, which keeps thinking bounded.
+    return {
+        "max_tokens": OPENROUTER_REASONING_MAX_TOKENS,
+        "exclude": True,
+    }
+
+
 def _sanitize_model_answer(text: str) -> str:
     if not isinstance(text, str):
         return ""
@@ -247,6 +262,7 @@ def ask_vertex(prompt,
                request_timeout=(10, 120),
                api_base_url: Optional[str] = None,
                api_key: Optional[str] = None,
+               openrouter_thinking: bool = False,
                return_metadata: bool = False):
     """ 
     Returns:
@@ -374,12 +390,7 @@ def ask_vertex(prompt,
                         }
                     ],
                     'max_tokens': max_output_tokens,
-                    'reasoning': {
-                        'exclude': True,
-                    },
-                    'provider': {
-                        'quantizations': ['bf16', 'fp16', 'fp8']
-                    }
+                    'reasoning': _build_openrouter_reasoning(openrouter_thinking),
                 }
                 if temperature is not None:
                     payload['temperature'] = temperature

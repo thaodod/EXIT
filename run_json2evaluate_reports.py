@@ -17,7 +17,8 @@ def describe_evaluator(args: argparse.Namespace) -> str:
     if args.api:
         if args.api_base_url:
             return f"OpenAI-compatible API model `{args.api}` @ `{args.api_base_url}`"
-        return f"Default API routing model `{args.api}`"
+        thinking = "thinking enabled" if args.openrouter_thinking else "thinking disabled"
+        return f"Default API routing model `{args.api}` ({thinking})"
     return f"Local model `{args.reader_model_name}`"
 
 
@@ -72,6 +73,11 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         help="API model name. If set, uses API instead of a local reader.",
+    )
+    parser.add_argument(
+        "--openrouter-thinking",
+        action="store_true",
+        help="Enable OpenRouter thinking/reasoning. Disabled by default.",
     )
     parser.add_argument(
         "--api-base-url",
@@ -255,6 +261,7 @@ def main() -> int:
         api_model=args.api,
         api_base_url=args.api_base_url,
         api_key=args.api_key,
+        openrouter_thinking=args.openrouter_thinking,
     )
 
     failures = 0

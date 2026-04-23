@@ -1,6 +1,6 @@
 import unittest
 
-from ask_vertex import _sanitize_model_answer
+from ask_vertex import _build_openrouter_reasoning, _sanitize_model_answer
 
 
 class SanitizeModelAnswerTests(unittest.TestCase):
@@ -27,6 +27,26 @@ class SanitizeModelAnswerTests(unittest.TestCase):
     def test_preserves_plain_non_thinking_response(self):
         text = "The answer is Berlin."
         self.assertEqual(_sanitize_model_answer(text), "The answer is Berlin.")
+
+
+class OpenRouterReasoningTests(unittest.TestCase):
+    def test_disables_openrouter_thinking_by_default(self):
+        self.assertEqual(
+            _build_openrouter_reasoning(False),
+            {
+                "effort": "none",
+                "exclude": True,
+            },
+        )
+
+    def test_enables_openrouter_thinking_with_fixed_budget(self):
+        self.assertEqual(
+            _build_openrouter_reasoning(True),
+            {
+                "max_tokens": 1024,
+                "exclude": True,
+            },
+        )
 
 
 if __name__ == "__main__":
