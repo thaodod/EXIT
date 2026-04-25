@@ -3,14 +3,14 @@ import argparse
 import json
 import os
 import re
+import string
 import time
 import unicodedata
+from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import requests
-
-from utils import evaluate_batch, print_evaluation_results
 
 DEFAULT_ENDPOINT = "/v1/responses"
 DEFAULT_MODEL = "gpt-5-mini"
@@ -23,6 +23,82 @@ _YES_NO_RE = re.compile(
     r"^\s*(?:[\"\u201c\u201d'\[])?\s*(yes|no)\b",
     flags=re.IGNORECASE,
 )
+
+
+def normalize_answer(s: str) -> str:
+    def remove_articles(text: str) -> str:
+        return re.sub(r"\b(a|an|the)\b", " ", text)
+
+    def white_space_fix(text: str) -> str:
+        return " ".join(text.split())
+
+    def remove_punc(text: str) -> str:
+        exclude = set(string.punctuation)
+        return "".join(ch for ch in text if ch not in exclude)
+
+    return white_space_fix(
+        remove_articles(remove_punc(unicodedata.normalize("NFD", s).lower()))
+    )
+
+
+def f1_score(prediction: str, ground_truth: str) -> float:
+    prediction_tokens = normalize_answer(prediction).split()
+    ground_truth_tokens = normalize_answer(ground_truth).split()
+    common = Counter(prediction_tokens) & Counter(ground_truth_tokens)
+    num_same = sum(common.values())
+    if num_same == 0:
+        return 0
+    precision = num_same / len(prediction_tokens) if prediction_tokens else 0
+    recall = num_same / len(ground_truth_tokens) if ground_truth_tokens else 0
+    if precision + recall == 0:
+        return 0
+    return (2 * precision * recall) / (precision + recall)
+
+
+def exact_match_score(prediction: str, ground_truth: str) -> bool:
+    return normalize_answer(prediction) == normalize_answer(ground_truth)
+
+
+def multi_answer_em(prediction: str, ground_truths: Union[str, List[str]]) -> float:
+    if isinstance(ground_truths, str):
+        ground_truths = [ground_truths]
+    return max(exact_match_score(prediction, gt) for gt in ground_truths)
+
+
+def multi_answer_f1(prediction: str, ground_truths: Union[str, List[str]]) -> float:
+    if isinstance(ground_truths, str):
+        ground_truths = [ground_truths]
+    return max(f1_score(prediction, gt) for gt in ground_truths)
+
+
+def evaluate_batch(predictions: List[str], ground_truths: List[Any]) -> Dict[str, float]:
+    if len(predictions) != len(ground_truths):
+        raise ValueError(
+            f"Predictions ({len(predictions)}) and ground truths "
+            f"({len(ground_truths)}) must have same length"
+        )
+
+    total_em = 0.0
+    total_f1 = 0.0
+    for pred, gt in zip(predictions, ground_truths):
+        total_em += multi_answer_em(pred, gt)
+        total_f1 += multi_answer_f1(pred, gt)
+
+    return {
+        "exact_match": total_em,
+        "f1": total_f1,
+        "count": len(predictions),
+    }
+
+
+def print_evaluation_results(results: Dict[str, float], title: str = "EVALUATION RESULTS") -> None:
+    print("\n" + "=" * 80)
+    print(title)
+    print("=" * 80)
+    print(f"Questions Scored: {results['count']}")
+    print(f"Exact Match: {results['exact_match_percentage']:.2f}%")
+    print(f"F1 Score: {results['f1_percentage']:.2f}%")
+    print("=" * 80)
 
 
 def canonicalize_text(text: str) -> str:
@@ -248,6 +324,10 @@ def wait_for_file_processed(
         file_obj = get_file(api_key, file_id)
         status = file_obj.get("status")
         if status == "processed":
+            return file_obj
+        if status is None:
+            # File status is deprecated in the current Files API. If it is not
+            # returned, let batch creation perform validation instead of timing out.
             return file_obj
         if status in {"error", "failed"}:
             raise RuntimeError(f"File {file_id} failed to process: {file_obj}")
@@ -542,6 +622,7 @@ def evaluate_predictions(
         "incomplete_content_filter": stats.get("incomplete_content_filter", 0),
         "exact_match_percentage": 100.0 * total_em / total_count if total_count else 0,
         "f1_percentage": 100.0 * total_f1 / total_count if total_count else 0,
+        "yes_no_extracted": stats.get("yes_no_extracted", 0),
     }
 
 
@@ -562,8 +643,8 @@ def parse_method_and_k_from_filename(filename: str) -> Tuple[str, Optional[int]]
     Expected pattern: {method}_k{N}_{dataset}.json
     Returns: (method, k) or defaults if not matched
     """
-    # Match patterns like exit_k20_HotpotQA.json, ours_k20_HotpotQA.json
-    match = re.search(r"^([^_]+)_k(\d+)_", filename)
+    # Match patterns like exit_k20_HotpotQA.json, recomp_abstractive_k5_TQA.json.
+    match = re.search(r"^(.+)_k(\d+)_", filename)
     if match:
         return match.group(1), int(match.group(2))
     return "unknown", None
@@ -588,6 +669,47 @@ def detect_input_format(data: Any) -> str:
     )
 
 
+def normalize_external_record(item: Dict[str, Any], input_path: str, index: int) -> Dict[str, Any]:
+    question = item.get("question")
+    context = item.get("compressed_document", item.get("compressed_context"))
+    if question is None or context is None:
+        raise ValueError(
+            f"{input_path} item {index} must contain 'question' and "
+            "'compressed_document' or 'compressed_context'."
+        )
+
+    if "ground_truth" in item:
+        ground_truth = item["ground_truth"]
+    elif "answer" in item:
+        ground_truth = item["answer"]
+    elif "answers" in item:
+        ground_truth = item["answers"]
+    else:
+        raise ValueError(
+            f"{input_path} item {index} must contain 'ground_truth', 'answer', or 'answers'."
+        )
+
+    context = re.sub(r"\n{3,}", "\n", context)
+    prompt_api = item.get("prompt_api")
+    if prompt_api is None:
+        prompt_api = format_prompt_api(question, context)
+
+    normalized_item = {
+        "question": question,
+        "prompt_api": prompt_api,
+        "ground_truth": ground_truth,
+    }
+    for optional_key in (
+        "compressed_context",
+        "compressed_document",
+        "original_tokens",
+        "compressed_tokens",
+    ):
+        if optional_key in item:
+            normalized_item[optional_key] = item[optional_key]
+    return normalized_item
+
+
 def normalize_input_data(
     data: Any,
     input_path: str,
@@ -602,32 +724,34 @@ def normalize_input_data(
     """
     input_format = detect_input_format(data)
     filename = Path(input_path).name
+    method, k = parse_method_and_k_from_filename(filename)
     
     if input_format == "existing":
-        # Already in the expected format
-        return data["metadata"], data["data"]
+        records = data["data"]
+        metadata = dict(data["metadata"])
+        metadata.setdefault("method", method)
+        metadata.setdefault("k", k if k is not None else "unknown")
+        metadata.setdefault("total_questions", len(records))
+        metadata.setdefault("compression_ratio", 0.0)
+        metadata.setdefault("total_original_tokens", 0)
+        metadata.setdefault("total_compressed_tokens", 0)
+
+        if records and isinstance(records[0], dict):
+            first_item = records[0]
+            if "prompt_api" not in first_item or "ground_truth" not in first_item:
+                return metadata, [
+                    normalize_external_record(item, input_path, idx)
+                    for idx, item in enumerate(records)
+                ]
+
+        return metadata, records
     
     elif input_format == "ours":
         # Convert 'ours' format to normalized format
-        method, k = parse_method_and_k_from_filename(filename)
-        
-        normalized_items = []
-        for item in data:
-            question = item["question"]
-            context = item["compressed_document"]
-            ground_truth = item["answer"]
-            
-            # Reduce 3+ consecutive newlines to 1
-            context = re.sub(r"\n{3,}", "\n", context)
-            
-            # Generate prompt_api using the same template as existing format
-            prompt_api = format_prompt_api(question, context)
-            
-            normalized_items.append({
-                "question": question,
-                "prompt_api": prompt_api,
-                "ground_truth": ground_truth,
-            })
+        normalized_items = [
+            normalize_external_record(item, input_path, idx)
+            for idx, item in enumerate(data)
+        ]
         
         metadata = {
             "input_file": input_path,

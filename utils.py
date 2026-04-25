@@ -195,7 +195,7 @@ def generate_answers_api(
             return 0
         requested_workers = max(1, int(max_workers))
         if api_model and "gemini-3" in api_model.lower():
-            requested_workers = min(requested_workers, 4)
+            requested_workers = min(requested_workers, 8)
         return min(requested_workers, prompt_count)
 
     def call_api_single(prompt):
