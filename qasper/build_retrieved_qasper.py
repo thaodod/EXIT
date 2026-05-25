@@ -148,7 +148,7 @@ class SentenceTransformerEmbedder:
 
         model_kwargs: dict[str, Any] = {}
         if self.device.startswith("cuda"):
-            model_kwargs["torch_dtype"] = torch.bfloat16
+            model_kwargs["dtype"] = torch.bfloat16
 
         self.model = SentenceTransformer(
             model_name,
@@ -625,7 +625,11 @@ def corpus_fingerprint(chunks: Sequence[Chunk], args: argparse.Namespace) -> str
 def cache_paths(cache_dir: Path, model_name: str, fingerprint: str) -> tuple[Path, Path, Path]:
     safe_model = re.sub(r"[^A-Za-z0-9._-]+", "_", model_name).strip("_")
     base = cache_dir / f"{safe_model}_{fingerprint[:12]}"
-    return base.with_suffix(".chunks.jsonl"), base.with_suffix(".embeddings.npy"), base.with_suffix(".meta.json")
+    return (
+        Path(f"{base}.chunks.jsonl"),
+        Path(f"{base}.embeddings.npy"),
+        Path(f"{base}.meta.json"),
+    )
 
 
 def load_cached_index(chunks_path: Path, embeddings_path: Path, meta_path: Path, fingerprint: str) -> tuple[list[Chunk], np.ndarray] | None:

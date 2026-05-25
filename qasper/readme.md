@@ -1,7 +1,9 @@
 # QASPER Retrieved Benchmark
 
 This directory contains the preprocessing/retrieval script used to create the
-QASPER benchmark files in `retrieved/contriever-msmarco_QASPER/`.
+QASPER benchmark files in `retrieved/contriever-msmarco_QASPER/` and the
+alternative modern-retriever files in
+`retrieved/qwen3-embedding-0.6B_QASPER/`.
 
 ## Source
 
@@ -19,14 +21,21 @@ Generated files:
 - `retrieved/contriever-msmarco_QASPER/test.json`
 - `retrieved/contriever-msmarco_QASPER/test_500.json`
 - `retrieved/contriever-msmarco_QASPER/metadata.json`
+- `retrieved/qwen3-embedding-0.6B_QASPER/dev.json`
+- `retrieved/qwen3-embedding-0.6B_QASPER/dev_500.json`
+- `retrieved/qwen3-embedding-0.6B_QASPER/test.json`
+- `retrieved/qwen3-embedding-0.6B_QASPER/test_500.json`
+- `retrieved/qwen3-embedding-0.6B_QASPER/metadata.json`
 
 The `.json` data files follow the repository's existing JSONL convention: one
 JSON object per line, with `question`, `answers`, `answer`, and `ctxs`.
 
 The generated dev/test files still contain exactly 100 retrieved `ctxs` per
-question. In the retrieved top-100 contexts, word counts are centered around the
-target: dev median 101 / mean 100.51 / max 281, and test median 101 / mean
-100.52 / max 250.
+question. In the Contriever top-100 contexts, word counts are centered around
+the target: dev median 101 / mean 100.51 / max 281, and test median 101 / mean
+100.52 / max 250. In the Qwen3 top-100 contexts, the same chunking gives dev
+median 100 / mean 100.23 / max 281, and test median 100 / mean 100.11 / max
+281.
 
 ## Settings
 
@@ -41,7 +50,7 @@ target: dev median 101 / mean 100.51 / max 281, and test median 101 / mean
 - Corpus chunk word stats: min 16, p05 85, mean 100.19, median 100, p95 115,
   max 1,157. The maximum is one appendix/list chunk that is kept whole because
   it has no reliable sentence break.
-- Retriever: `facebook/contriever-msmarco`.
+- Default retriever: `facebook/contriever-msmarco`.
 - Embedding: Hugging Face `AutoModel`, mean pooling over the last hidden state,
   dot-product scoring, no L2 normalization.
 - Top-k: 100 chunks per question.
@@ -49,6 +58,24 @@ target: dev median 101 / mean 100.51 / max 281, and test median 101 / mean
   is paper-anchored, so the title is included to preserve that setting while
   still retrieving from the global QASPER scientific-paper corpus.
 - Saved `question`: the original QASPER question only.
+
+## Alternative Retriever
+
+I also generated a second retrieved set with `Qwen/Qwen3-Embedding-0.6B`, a
+newer instruction-aware embedding model, to support reviewer comparisons beyond
+Contriever.
+
+- Output directory: `retrieved/qwen3-embedding-0.6B_QASPER/`.
+- Model card: `https://huggingface.co/Qwen/Qwen3-Embedding-0.6B`.
+- Backend: `sentence-transformers`.
+- Document embeddings: no prompt.
+- Query embeddings: instruction prompt
+  `Instruct: Given a question about a scientific paper, retrieve relevant passages that help answer it.\nQuery: `.
+- Scoring: dot product over normalized embeddings, equivalent to cosine
+  similarity.
+- Chunking, overlap, QASPER filtering, top-k, and `title_question` retrieval
+  query mode are identical to the Contriever run.
+- Dev/test counts are unchanged: 945 dev questions and 1,372 test questions.
 
 ## Answer Filtering
 
@@ -79,7 +106,7 @@ Each retrieved context has the same fields as the existing benchmark files:
   "id": "qasper:<paper_id>:<chunk_index>",
   "title": "<paper title> | <dominant section>",
   "text": "<sentence-aware passage around 100 words>",
-  "score": "<contriever dot-product score>",
+  "score": "<retriever score>",
   "hasanswer": true
 }
 ```
@@ -93,6 +120,17 @@ From the repository root:
 
 ```bash
 conda run -n 312 python qasper/build_retrieved_qasper.py --overwrite
+```
+
+To reproduce the Qwen3 retriever variant:
+
+```bash
+conda run -n 312 python qasper/build_retrieved_qasper.py \
+  --output-dir retrieved/qwen3-embedding-0.6B_QASPER \
+  --embed-model Qwen/Qwen3-Embedding-0.6B \
+  --embed-backend sentence-transformers \
+  --embed-batch-size 64 \
+  --overwrite
 ```
 
 The script caches chunk embeddings under `qasper/cache/`, so later reruns reuse
