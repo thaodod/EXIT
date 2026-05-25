@@ -41,6 +41,7 @@ DEFAULT_TOP_K = 100
 DEFAULT_EMBED_BATCH_SIZE = 128
 DEFAULT_QUERY_BATCH_SIZE = 128
 CHUNKING_METHOD = "sentence_aware_v1"
+DEFAULT_QUERY_INSTRUCTION = "Given a question about a scientific paper, retrieve relevant passages that help answer it."
 
 
 @dataclass(frozen=True)
@@ -113,6 +114,76 @@ class ContrieverEmbedder:
             return np.zeros((0, int(self.model.config.hidden_size)), dtype=np.float32)
         return np.concatenate(outputs, axis=0)
 
+    def encode_documents(self, texts: Sequence[str], desc: str) -> np.ndarray:
+        return self.encode(texts, desc)
+
+    def encode_queries(self, texts: Sequence[str], desc: str) -> np.ndarray:
+        return self.encode(texts, desc)
+
+    @property
+    def backend_name(self) -> str:
+        return "transformers_mean_pool"
+
+    @property
+    def score_name(self) -> str:
+        return "dot product over mean-pooled embeddings"
+
+
+class SentenceTransformerEmbedder:
+    """SentenceTransformers embedder for modern instruction-aware models."""
+
+    def __init__(
+        self,
+        model_name: str,
+        device: str,
+        batch_size: int,
+        query_instruction: str,
+    ) -> None:
+        from sentence_transformers import SentenceTransformer
+
+        self.model_name = model_name
+        self.device = str(resolve_device(device))
+        self.batch_size = batch_size
+        self.query_prompt = f"Instruct: {query_instruction}\nQuery: "
+
+        model_kwargs: dict[str, Any] = {}
+        if self.device.startswith("cuda"):
+            model_kwargs["torch_dtype"] = torch.bfloat16
+
+        self.model = SentenceTransformer(
+            model_name,
+            device=self.device,
+            model_kwargs=model_kwargs,
+            tokenizer_kwargs={"padding_side": "left"},
+        )
+
+    def encode_documents(self, texts: Sequence[str], desc: str) -> np.ndarray:
+        return self._encode(texts, desc, prompt=None)
+
+    def encode_queries(self, texts: Sequence[str], desc: str) -> np.ndarray:
+        return self._encode(texts, desc, prompt=self.query_prompt)
+
+    def _encode(self, texts: Sequence[str], desc: str, prompt: str | None) -> np.ndarray:
+        if not texts:
+            return np.zeros((0, int(self.model.get_sentence_embedding_dimension() or 0)), dtype=np.float32)
+        embeddings = self.model.encode(
+            list(texts),
+            prompt=prompt,
+            batch_size=self.batch_size,
+            show_progress_bar=True,
+            convert_to_numpy=True,
+            normalize_embeddings=True,
+        )
+        return np.asarray(embeddings, dtype=np.float32)
+
+    @property
+    def backend_name(self) -> str:
+        return "sentence_transformers"
+
+    @property
+    def score_name(self) -> str:
+        return "cosine similarity via dot product over normalized embeddings"
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Create retrieved QASPER JSONL files.")
@@ -121,6 +192,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--raw-dir", default="qasper/raw")
     parser.add_argument("--splits", nargs="+", default=["dev", "test"], choices=["train", "dev", "test"])
     parser.add_argument("--embed-model", default=DEFAULT_MODEL)
+    parser.add_argument(
+        "--embed-backend",
+        choices=["transformers", "sentence-transformers"],
+        default="transformers",
+        help="Embedding backend. Use sentence-transformers for models such as Qwen3-Embedding.",
+    )
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--embed-batch-size", type=int, default=DEFAULT_EMBED_BATCH_SIZE)
     parser.add_argument("--query-batch-size", type=int, default=DEFAULT_QUERY_BATCH_SIZE)
@@ -138,6 +215,11 @@ def parse_args() -> argparse.Namespace:
         choices=["question", "title_question", "search_query_question"],
         default="title_question",
         help="Text sent to the retriever. The saved question field is always the original question.",
+    )
+    parser.add_argument(
+        "--query-instruction",
+        default=DEFAULT_QUERY_INSTRUCTION,
+        help="Instruction prefix used by the sentence-transformers query encoder.",
     )
     parser.add_argument(
         "--unanswerable-policy",
@@ -523,6 +605,8 @@ def corpus_fingerprint(chunks: Sequence[Chunk], args: argparse.Namespace) -> str
     payload = {
         "qasper_version": QASPER_VERSION,
         "embed_model": args.embed_model,
+        "embed_backend": args.embed_backend,
+        "query_instruction": args.query_instruction if args.embed_backend == "sentence-transformers" else None,
         "chunking_method": CHUNKING_METHOD,
         "chunk_words": args.chunk_words,
         "overlap_ratio": args.overlap_ratio,
@@ -581,6 +665,8 @@ def save_index(
                 "fingerprint": fingerprint,
                 "qasper_version": QASPER_VERSION,
                 "embed_model": args.embed_model,
+                "embed_backend": args.embed_backend,
+                "query_instruction": args.query_instruction if args.embed_backend == "sentence-transformers" else None,
                 "chunking_method": CHUNKING_METHOD,
                 "chunk_words": args.chunk_words,
                 "overlap_ratio": args.overlap_ratio,
@@ -636,7 +722,7 @@ def chunk_word_stats(chunks: Sequence[Chunk]) -> dict[str, float | int]:
 
 def load_or_build_index(
     raw_splits: dict[str, dict[str, Any]],
-    embedder: ContrieverEmbedder,
+    embedder: Any,
     args: argparse.Namespace,
 ) -> tuple[list[Chunk], np.ndarray, dict[str, Any]]:
     chunks = build_corpus(raw_splits, args)
@@ -655,7 +741,7 @@ def load_or_build_index(
         }
 
     texts = [chunk.text for chunk in chunks]
-    embeddings = embedder.encode(texts, desc="Embedding QASPER chunks")
+    embeddings = embedder.encode_documents(texts, desc="Embedding QASPER chunks")
     save_index(chunks_path, embeddings_path, meta_path, chunks, embeddings, fingerprint, args)
     return chunks, embeddings, {
         "fingerprint": fingerprint,
@@ -700,7 +786,7 @@ def retrieve_split(
     prepared: Sequence[PreparedQuestion],
     chunks: Sequence[Chunk],
     passage_embeddings: np.ndarray,
-    embedder: ContrieverEmbedder,
+    embedder: Any,
     args: argparse.Namespace,
 ) -> list[dict[str, Any]]:
     if not prepared:
@@ -713,7 +799,7 @@ def retrieve_split(
     for start in tqdm(range(0, len(prepared), args.query_batch_size), desc=f"Retrieving {split}"):
         batch_items = list(prepared[start : start + args.query_batch_size])
         batch_queries = queries[start : start + args.query_batch_size]
-        query_embeddings = embedder.encode(batch_queries, desc=f"Embedding {split} queries")
+        query_embeddings = embedder.encode_queries(batch_queries, desc=f"Embedding {split} queries")
         query_tensor = torch.from_numpy(query_embeddings).to(embedder.device)
         with torch.inference_mode():
             scores = query_tensor @ passage_tensor.T
@@ -757,18 +843,29 @@ def write_metadata(path: Path, metadata: dict[str, Any], overwrite: bool) -> Non
         json.dump(metadata, f, ensure_ascii=False, indent=2)
 
 
+def create_embedder(args: argparse.Namespace) -> Any:
+    if args.embed_backend == "sentence-transformers":
+        return SentenceTransformerEmbedder(
+            model_name=args.embed_model,
+            device=args.device,
+            batch_size=args.embed_batch_size,
+            query_instruction=args.query_instruction,
+        )
+    return ContrieverEmbedder(
+        model_name=args.embed_model,
+        device=args.device,
+        batch_size=args.embed_batch_size,
+        max_length=args.max_length,
+    )
+
+
 def main() -> None:
     args = parse_args()
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     raw_splits = load_raw_splits(Path(args.raw_dir))
-    embedder = ContrieverEmbedder(
-        model_name=args.embed_model,
-        device=args.device,
-        batch_size=args.embed_batch_size,
-        max_length=args.max_length,
-    )
+    embedder = create_embedder(args)
     chunks, passage_embeddings, index_meta = load_or_build_index(raw_splits, embedder, args)
 
     metadata: dict[str, Any] = {
@@ -777,7 +874,9 @@ def main() -> None:
         "source_urls": {"train_dev": TRAIN_DEV_URL, "test": TEST_URL},
         "output_dir": str(output_dir),
         "embed_model": args.embed_model,
-        "retriever": "contriever-msmarco dot product over mean-pooled embeddings",
+        "embed_backend": embedder.backend_name,
+        "retriever": f"{args.embed_model} {embedder.score_name}",
+        "query_instruction": args.query_instruction if args.embed_backend == "sentence-transformers" else None,
         "chunking_method": CHUNKING_METHOD,
         "target_chunk_words": args.chunk_words,
         "overlap_ratio": args.overlap_ratio,
