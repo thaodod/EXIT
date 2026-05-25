@@ -57,7 +57,8 @@ def get_compressor(method: str) -> BaseCompressor:
     if method == "provence":
         from .baselines.provence.compressor import ProvenceCompressor
 
-        return ProvenceCompressor(device="cuda", threshold=0.1)
+        threshold = float(os.getenv("PROVENCE_THRESHOLD", "0.1"))
+        return ProvenceCompressor(device="cuda", threshold=threshold)
     if method == "attn_comp":
         from .baselines.attn_comp.compressor import AttnCompCompressor
 
